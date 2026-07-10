@@ -79,7 +79,6 @@ export default function PortfolioDashboard() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // 과거 데이터 마이그레이션 및 undefined 방어 로직 추가
   const getDisplayPrice = (priceInKrw: number) => {
     const val = Number(priceInKrw) || 0;
     return currency === "USD" ? val / usdToKrw : val;
@@ -93,8 +92,9 @@ export default function PortfolioDashboard() {
       if (field === "avgPriceUsd") updated.avgPriceKrw = Number(val) * usdToKrw;
       if (field === "avgPriceKrw") updated.avgPriceUsd = Number(val) / usdToKrw;
       
+      // TypeScript 빌드 에러 방지를 위한 any 타입 단언 초치 완료 (Line 97 해결)
       if (["quantity", "avgPriceUsd", "avgPriceKrw", "currentPriceUsd", "currentPriceKrw"].includes(field)) {
-        updated[field] = Number(val) || 0;
+        (updated as any)[field] = Number(val) || 0;
       }
       
       return updated;
@@ -170,7 +170,6 @@ export default function PortfolioDashboard() {
 
     if (savedAssets) {
       try {
-        // 구형 데이터를 신형 데이터 규격으로 마이그레이션(undefined 방지)
         const parsed = JSON.parse(savedAssets).map((a: any) => ({
           id: a.id || Date.now().toString(),
           category: a.category || "현금",
@@ -246,7 +245,6 @@ export default function PortfolioDashboard() {
   const pieData = categories.map((key) => ({ name: key, value: categoryMap[key] }));
   const PIE_COLORS = ["#0ea5e9", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#64748b"];
 
-  // undefined를 0으로 캐스팅하는 안전한 Number Format 유틸
   const formatNum = (num: any) => {
     const val = Number(num);
     return isNaN(val) ? "0" : val.toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -301,7 +299,6 @@ export default function PortfolioDashboard() {
           </div>
         </header>
 
-        {/* 요약 계측 위젯 */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60"><p className="text-slate-500 text-sm font-medium mb-2">총 평가 금액</p><h2 className="text-3xl font-black text-slate-900">{formatCurrency(totalValue)}</h2></div>
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60"><p className="text-slate-500 text-sm font-medium mb-2">총 투자 원금</p><h2 className="text-3xl font-bold text-slate-700">{formatCurrency(totalInvestment)}</h2></div>
@@ -313,7 +310,6 @@ export default function PortfolioDashboard() {
           </div>
         </div>
 
-        {/* 거시지표 자동 모니터링 */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
             <h3 className="text-lg font-bold text-slate-800">일일 성과 및 거시지표 자동 모니터링</h3>
@@ -350,7 +346,6 @@ export default function PortfolioDashboard() {
           </div>
         </div>
 
-        {/* 시각화 도구 분할 트레이 */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 h-[450px] flex flex-col">
             <h3 className="text-lg font-bold text-slate-800 mb-4">포트폴리오 히트맵</h3>
@@ -385,7 +380,6 @@ export default function PortfolioDashboard() {
           </div>
         </div>
 
-        {/* 리밸런싱 계산 엔진 */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden flex flex-col">
           <h3 className="text-lg font-bold text-slate-800 mb-1">목표 비중 리밸런싱 (Value Rebalancing)</h3>
           <p className="text-xs text-slate-500 mb-4">설정한 목표 비중에 도달하기 위해 필요한 자산 자금의 매수/매도 액션을 계측합니다.</p>
@@ -425,7 +419,6 @@ export default function PortfolioDashboard() {
           </div>
         </div>
 
-        {/* 개별 종목 데이터베이스 관리 */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 flex flex-col">
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-lg font-bold text-slate-800">보유 종목 데이터베이스 관리</h3>
