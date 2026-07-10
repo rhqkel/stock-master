@@ -92,7 +92,6 @@ export default function PortfolioDashboard() {
       if (field === "avgPriceUsd") updated.avgPriceKrw = Number(val) * usdToKrw;
       if (field === "avgPriceKrw") updated.avgPriceUsd = Number(val) / usdToKrw;
       
-      // TypeScript 빌드 에러 방지를 위한 any 타입 단언 초치 완료 (Line 97 해결)
       if (["quantity", "avgPriceUsd", "avgPriceKrw", "currentPriceUsd", "currentPriceKrw"].includes(field)) {
         (updated as any)[field] = Number(val) || 0;
       }
@@ -370,7 +369,8 @@ export default function PortfolioDashboard() {
             <div className="flex-1 min-h-[250px] relative">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={85} dataKey="value" paddingAngle={3} label={({name, percent}) => `${name} (${(percent*100).toFixed(1)}%)`}>
+                  {/* undefined 방어 처리가 완비된 label 속성 (Line 373 해결) */}
+                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={85} dataKey="value" paddingAngle={3} label={({name, percent}) => `${name} (${((percent || 0) * 100).toFixed(1)}%)`}>
                     {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}
                   </Pie>
                   <RechartsTooltip formatter={(value: number) => formatCurrency(value)} />
