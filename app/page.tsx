@@ -369,11 +369,11 @@ export default function PortfolioDashboard() {
             <div className="flex-1 min-h-[250px] relative">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  {/* undefined 방어 처리가 완비된 label 속성 (Line 373 해결) */}
                   <Pie data={pieData} cx="50%" cy="50%" innerRadius={55} outerRadius={85} dataKey="value" paddingAngle={3} label={({name, percent}) => `${name} (${((percent || 0) * 100).toFixed(1)}%)`}>
                     {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}
                   </Pie>
-                  <RechartsTooltip formatter={(value: number) => formatCurrency(value)} />
+                  {/* Recharts 툴팁 타입 불일치 방어코드 적용 완료 (value: any 지정으로 Line 376 해결) */}
+                  <RechartsTooltip formatter={(value: any) => formatCurrency(value)} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
