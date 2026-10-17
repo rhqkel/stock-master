@@ -53,6 +53,7 @@ const KOR_STOCK_DICT: Record<string, string> = {
   "카카오": "035720",
 };
 
+const ALL_CATEGORIES = ["가상자산", "미국주식", "국내주식", "현금"];
 const PIE_COLORS = ["#0ea5e9", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#64748b"];
 
 // --- 히트맵 커스텀 렌더러 ---
@@ -61,11 +62,11 @@ const CustomTreemapContent = (props: any) => {
   if (!width || !height) return null;
 
   const safeRate = typeof profitRate === "number" && !isNaN(profitRate) ? profitRate : 0;
-  let bgColor = "#64748b"; // 0% 보합 (슬레이트)
-  if (safeRate >= 5) bgColor = "#059669"; // 강한 상승
-  else if (safeRate > 0) bgColor = "#10b981"; // 상승
-  else if (safeRate <= -5) bgColor = "#e11d48"; // 강한 하락
-  else if (safeRate < 0) bgColor = "#ef4444"; // 하락
+  let bgColor = "#64748b";
+  if (safeRate >= 5) bgColor = "#059669";
+  else if (safeRate > 0) bgColor = "#10b981";
+  else if (safeRate <= -5) bgColor = "#e11d48";
+  else if (safeRate < 0) bgColor = "#ef4444";
 
   return (
     <g>
@@ -90,9 +91,19 @@ export default function PortfolioDashboard() {
   const [history, setHistory] = useState<MonthlyHistory[]>([]);
   const [goal, setGoal] = useState<number>(10000000000);
   const [targetWeights, setTargetWeights] = useState<Record<string, number>>({});
+  const [rebalanceEnabled, setRebalanceEnabled] = useState<Record<string, boolean>>({
+    "가상자산": true,
+    "미국주식": true,
+    "국내주식": true,
+    "현금": true,
+  });
 
   const [yesterdayValue, setYesterdayValue] = useState<number>(0);
   const [usdToKrw, setUsdToKrw] = useState<number>(1380);
+  const [fxSource, setFxSource] = useState<string>("Yahoo Finance (KRW=X)");
+  const [fxTimestamp, setFxTimestamp] = useState<string>("-");
+  const [priceTimestamp, setPriceTimestamp] = useState<string>("-");
+
   const [currency, setCurrency] = useState<"KRW" | "USD">("KRW");
   const [heatmapPeriod, setHeatmapPeriod] = useState<HeatmapPeriod>("1D");
 
@@ -105,13 +116,30 @@ export default function PortfolioDashboard() {
   const [importText, setImportText] = useState("");
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<string>("-");
   const [isLoaded, setIsLoaded] = useState(false);
 
   // 월별 자산 수동 추가 입력 상태
   const [manualDate, setManualDate] = useState<string>("");
   const [manualValueKrw, setManualValueKrw] = useState<string>("");
   const [manualPrincipalKrw, setManualPrincipalKrw] = useState<string>("");
+
+  const formatKstDateTime = (isoOrDate: string | Date) => {
+    try {
+      const d = typeof isoOrDate === "string" ? new Date(isoOrDate) : isoOrDate;
+      if (isNaN(d.getTime())) return "-";
+      return d.toLocaleString("ko-KR", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+    } catch {
+      return "-";
+    }
+  };
 
   const getDisplayPrice = (priceInKrw: number) => {
     const val = Number(priceInKrw) || 0;
@@ -125,7 +153,7 @@ export default function PortfolioDashboard() {
 
   const formatCurrency = (num: any) => (currency === "USD" ? `$${formatNum(num)}` : `₩${formatNum(num)}`);
 
-  // --- 자산 업데이트 로직 (현금인 경우 평단가와 현재시세 자동 일치) ---
+  // --- 자산 업데이트 로직 ---
   const updateAsset = (id: string, field: keyof Asset, val: string | number) => {
     setAssets((prev) =>
       prev.map((a) => {
@@ -136,7 +164,6 @@ export default function PortfolioDashboard() {
           (updated as any)[field] = Number(val) || 0;
         }
 
-        // 카테고리를 '현금'으로 변경한 경우 수량 1로 고정 및 평단가=현재가 동기화
         if (field === "category" && val === "현금") {
           const baseUsd = updated.currentPriceUsd > 0 ? updated.currentPriceUsd : updated.avgPriceUsd * (updated.quantity || 1);
           const baseKrw = updated.currentPriceKrw > 0 ? updated.currentPriceKrw : updated.avgPriceKrw * (updated.quantity || 1);
@@ -152,7 +179,6 @@ export default function PortfolioDashboard() {
           return updated;
         }
 
-        // 현금 자산의 현재 시세(보유액) 입력 시 평단가도 자동 동일화 (평단가 별도 입력 불필요)
         if (updated.category === "현금") {
           updated.quantity = 1;
           if (field === "currentPriceUsd") {
@@ -165,7 +191,6 @@ export default function PortfolioDashboard() {
           return updated;
         }
 
-        // 일반 자산의 매수 평단가 환산 연동
         if (field === "avgPriceUsd") updated.avgPriceKrw = Number(val) * usdToKrw;
         if (field === "avgPriceKrw") updated.avgPriceUsd = Number(val) / usdToKrw;
 
@@ -198,12 +223,63 @@ export default function PortfolioDashboard() {
   const updateTargetWeight = (cat: string, val: string) =>
     setTargetWeights((prev) => ({ ...prev, [cat]: Number(val) || 0 }));
 
+  const toggleRebalanceCategory = (cat: string) =>
+    setRebalanceEnabled((prev) => ({ ...prev, [cat]: !prev[cat] }));
+
+  // --- 실시간 환율 동기화 및 보유자산 환산액 즉시 업데이트 ---
+  const fetchExchangeRate = async (): Promise<number> => {
+    try {
+      const res = await fetch("/api/fx", { cache: "no-store" });
+      const data = await res.json();
+      if (data.rate && Number(data.rate) > 900) {
+        const newRate = Number(data.rate);
+        setUsdToKrw(newRate);
+        if (data.source) setFxSource(data.source);
+        setFxTimestamp(formatKstDateTime(data.timestamp || new Date()));
+
+        // 환율 갱신 시 미국주식/가상자산의 원화 환산가 및 국내주식의 달러 환산가 재계산
+        setAssets((prev) =>
+          prev.map((a) => {
+            if (a.category === "미국주식" || a.category === "가상자산") {
+              return {
+                ...a,
+                avgPriceKrw: a.avgPriceUsd * newRate,
+                currentPriceKrw: a.currentPriceUsd * newRate,
+              };
+            } else if (a.category === "국내주식") {
+              return {
+                ...a,
+                avgPriceUsd: a.avgPriceKrw / newRate,
+                currentPriceUsd: a.currentPriceKrw / newRate,
+              };
+            } else if (a.category === "현금") {
+              const krwVal = a.currentPriceKrw > 0 ? a.currentPriceKrw : a.currentPriceUsd * newRate;
+              const usdVal = krwVal / newRate;
+              return {
+                ...a,
+                avgPriceKrw: krwVal,
+                currentPriceKrw: krwVal,
+                avgPriceUsd: usdVal,
+                currentPriceUsd: usdVal,
+              };
+            }
+            return a;
+          })
+        );
+        return newRate;
+      }
+    } catch (e) {
+      console.error("환율 조회 실패", e);
+    }
+    return usdToKrw;
+  };
+
   // --- 지수 및 개별 종목 시세 Fetch ---
   const fetchGlobalIndices = async () => {
     const tickers = { nasdaq: "^IXIC", snp: "^GSPC", kospi: "^KS11" };
     for (const [key, ticker] of Object.entries(tickers)) {
       try {
-        const res = await fetch(`/api/price?ticker=${encodeURIComponent(ticker)}`);
+        const res = await fetch(`/api/price?ticker=${encodeURIComponent(ticker)}`, { cache: "no-store" });
         const data = await res.json();
         if (data.dailyReturn !== undefined && data.yearlyReturn !== undefined) {
           setMarketIndices((prev) => ({
@@ -230,7 +306,7 @@ export default function PortfolioDashboard() {
     }
 
     try {
-      const response = await fetch(`/api/price?ticker=${encodeURIComponent(tickerToSearch)}`);
+      const response = await fetch(`/api/price?ticker=${encodeURIComponent(tickerToSearch)}`, { cache: "no-store" });
       const data = await response.json();
       if (data.price) {
         let priceUsd = 0;
@@ -241,6 +317,9 @@ export default function PortfolioDashboard() {
         } else if (category === "국내주식") {
           priceKrw = Number(data.price) || 0;
           priceUsd = priceKrw / currentFx;
+        }
+        if (data.marketTime) {
+          setPriceTimestamp(formatKstDateTime(data.marketTime));
         }
         setAssets((prev) =>
           prev.map((a) =>
@@ -267,16 +346,7 @@ export default function PortfolioDashboard() {
     if (isRefreshing) return;
     setIsRefreshing(true);
     try {
-      let latestFx = usdToKrw;
-      try {
-        const fxRes = await fetch("/api/fx");
-        const fxData = await fxRes.json();
-        if (fxData.rate) {
-          latestFx = Number(fxData.rate);
-          setUsdToKrw(latestFx);
-        }
-      } catch {}
-
+      const latestFx = await fetchExchangeRate();
       await fetchGlobalIndices();
       for (const asset of assets) {
         if (asset.category !== "현금") {
@@ -284,12 +354,7 @@ export default function PortfolioDashboard() {
           await new Promise((resolve) => setTimeout(resolve, 150));
         }
       }
-      const now = new Date();
-      setLastUpdated(
-        `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(
-          now.getSeconds()
-        ).padStart(2, "0")}`
-      );
+      setPriceTimestamp(formatKstDateTime(new Date()));
     } finally {
       setIsRefreshing(false);
     }
@@ -301,6 +366,7 @@ export default function PortfolioDashboard() {
     const savedHistory = localStorage.getItem("vr_portfolio_history_v2");
     const savedGoal = localStorage.getItem("vr_portfolio_goal");
     const savedWeights = localStorage.getItem("vr_portfolio_weights");
+    const savedRebalEnabled = localStorage.getItem("vr_portfolio_rebal_enabled");
     const savedYest = localStorage.getItem("vr_portfolio_yesterday");
 
     const now = new Date();
@@ -400,12 +466,15 @@ export default function PortfolioDashboard() {
 
     if (savedGoal) setGoal(Number(savedGoal) || 10000000000);
     if (savedWeights) setTargetWeights(JSON.parse(savedWeights));
+    if (savedRebalEnabled) {
+      try {
+        setRebalanceEnabled(JSON.parse(savedRebalEnabled));
+      } catch {}
+    }
     if (savedYest) setYesterdayValue(Number(savedYest) || 0);
 
-    fetch("/api/fx")
-      .then((res) => res.json())
-      .then((data) => data.rate && setUsdToKrw(Number(data.rate)))
-      .catch(() => {});
+    // 페이지 진입 즉시 실시간 환율 및 글로벌 지수 호출
+    fetchExchangeRate();
     fetchGlobalIndices();
 
     setIsLoaded(true);
@@ -418,9 +487,10 @@ export default function PortfolioDashboard() {
       localStorage.setItem("vr_portfolio_history_v2", JSON.stringify(history));
       localStorage.setItem("vr_portfolio_goal", goal.toString());
       localStorage.setItem("vr_portfolio_weights", JSON.stringify(targetWeights));
+      localStorage.setItem("vr_portfolio_rebal_enabled", JSON.stringify(rebalanceEnabled));
       localStorage.setItem("vr_portfolio_yesterday", yesterdayValue.toString());
     }
-  }, [assets, history, goal, targetWeights, yesterdayValue, isLoaded]);
+  }, [assets, history, goal, targetWeights, rebalanceEnabled, yesterdayValue, isLoaded]);
 
   // --- 매달 1일 접속 시 총 자산 자동 스냅샷 기록 ---
   useEffect(() => {
@@ -483,7 +553,7 @@ export default function PortfolioDashboard() {
     .map((key) => ({ name: key, value: principalCategoryMap[key] }))
     .filter((d) => d.value > 0);
 
-  // --- 자산군 비중 도넛 차트 커스텀 툴팁 (개별 종목의 총 자산 대비 % 표시) ---
+  // --- 자산군 비중 도넛 차트 커스텀 툴팁 ---
   const CustomPieTooltip = ({ active, payload, mode }: any) => {
     if (!active || !payload || !payload.length) return null;
     const categoryName = payload[0].name;
@@ -534,7 +604,7 @@ export default function PortfolioDashboard() {
     );
   };
 
-  // --- 히트맵 데이터 (선택한 기간 반영) ---
+  // --- 히트맵 데이터 ---
   const getAssetReturnByPeriod = (a: Asset, period: HeatmapPeriod): number => {
     if (a.category === "현금") return 0;
     if (period === "1D") return Number(a.return1D) || 0;
@@ -631,14 +701,14 @@ export default function PortfolioDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-800 pb-20">
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-800 pb-16">
       <div className="max-w-[1400px] mx-auto space-y-6">
         {/* 상단 헤더 & 우측 현재 시세 새로고침 버튼 */}
         <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
             <h1 className="text-3xl font-black tracking-tight text-slate-900">Portfolio & VR Master Dashboard</h1>
             <p className="text-sm text-slate-500 mt-1">
-              실시간 자산 배분 계측 및 거시지표 자동 동기화 시스템 (최근 갱신: {lastUpdated})
+              실시간 자산 배분 계측 및 거시지표 자동 동기화 시스템
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -705,13 +775,22 @@ export default function PortfolioDashboard() {
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
             <h3 className="text-lg font-bold text-slate-800">일일 성과 및 거시지표 자동 모니터링</h3>
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 bg-slate-50 p-2 rounded-lg border">
-              <span>실시간 동기화 환율: 1$ = ₩{usdToKrw.toFixed(2)}</span>
-              <span className="mx-1">|</span>
+            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 p-2.5 rounded-lg border">
+              <span className="text-blue-700 font-bold">
+                실시간 환율: 1$ = ₩{usdToKrw.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+              <button
+                onClick={fetchExchangeRate}
+                className="bg-white border border-slate-300 hover:bg-blue-50 text-slate-700 px-2 py-0.5 rounded text-[11px] font-bold transition-colors"
+                title="환율 단독 즉시 갱신"
+              >
+                ↻ 환율갱신
+              </button>
+              <span className="mx-1 text-slate-300">|</span>
               <label>어제 자산 총액(₩) 기입:</label>
               <input
                 type="number"
-                className="border border-slate-300 px-2 py-0.5 rounded text-sm w-32 font-bold focus:outline-none"
+                className="border border-slate-300 px-2 py-0.5 rounded text-sm w-32 font-bold focus:outline-none bg-white"
                 value={yesterdayValue}
                 onChange={(e) => setYesterdayValue(Number(e.target.value))}
               />
@@ -767,9 +846,8 @@ export default function PortfolioDashboard() {
           </div>
         </div>
 
-        {/* 히트맵 (일/주/월/연 선택) & 자산군 비중 (평가액/원금 동시 표시 + 호버 시 종목별 비중) */}
+        {/* 히트맵 & 자산군 비중 */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* 포트폴리오 히트맵 */}
           <div className="lg:col-span-6 bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 h-[460px] flex flex-col">
             <div className="flex flex-wrap justify-between items-center gap-2 mb-4">
               <h3 className="text-lg font-bold text-slate-800">포트폴리오 히트맵</h3>
@@ -806,7 +884,6 @@ export default function PortfolioDashboard() {
             </div>
           </div>
 
-          {/* 자산군 비중 그래프 (평가액 기준 + 원금 기준 동시 표시) */}
           <div className="lg:col-span-6 bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 flex flex-col h-[460px]">
             <div className="mb-2">
               <h3 className="text-lg font-bold text-slate-800">자산군 Allocation 비중 (평가액 vs 원금)</h3>
@@ -815,7 +892,6 @@ export default function PortfolioDashboard() {
               </p>
             </div>
             <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2 min-h-[340px]">
-              {/* 1. 평가액 기준 도넛 */}
               <div className="flex flex-col items-center">
                 <span className="text-xs font-extrabold text-blue-700 bg-blue-50 px-3 py-1 rounded-full mb-1">
                   평가액 기준 비중
@@ -843,7 +919,6 @@ export default function PortfolioDashboard() {
                 </div>
               </div>
 
-              {/* 2. 원금 기준 도넛 */}
               <div className="flex flex-col items-center">
                 <span className="text-xs font-extrabold text-slate-700 bg-slate-100 px-3 py-1 rounded-full mb-1">
                   원금 기준 비중
@@ -918,7 +993,6 @@ export default function PortfolioDashboard() {
             )}
           </div>
 
-          {/* 월별 데이터 수동 입력 및 관리 바 */}
           <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="font-bold text-slate-600">월별 기록 직접 추가:</span>
@@ -970,22 +1044,36 @@ export default function PortfolioDashboard() {
           </div>
         </div>
 
-        {/* 목표 비중 리밸런싱 */}
+        {/* 목표 비중 리밸런싱 (맨 왼쪽 체크박스 + 미체크 시 음영 처리) */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden flex flex-col">
-          <h3 className="text-lg font-bold text-slate-800 mb-1">목표 비중 리밸런싱 (Value Rebalancing)</h3>
-          <p className="text-xs text-slate-500 mb-4">설정한 목표 비중에 도달하기 위해 필요한 자산 자금의 매수/매도 액션을 계측합니다.</p>
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
+            <div>
+              <h3 className="text-lg font-bold text-slate-800">목표 비중 리밸런싱 (Value Rebalancing)</h3>
+              <p className="text-xs text-slate-500">
+                좌측 체크박스를 선택한 자산군만 선명하게 활성화되며, 체크 해제 시 어둡게 음영 처리되어 리밸런싱 계산에서 제외됩니다.
+              </p>
+            </div>
+            <span className="text-xs font-bold text-slate-600 bg-slate-100 px-3 py-1.5 rounded-lg">
+              활성 목표 비중 합계:{" "}
+              <strong className="text-blue-600">
+                {ALL_CATEGORIES.reduce((sum, c) => sum + (rebalanceEnabled[c] !== false ? targetWeights[c] || 0 : 0), 0)}%
+              </strong>
+            </span>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left border-collapse">
               <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-semibold border-y border-slate-200">
                 <tr>
+                  <th className="py-3 px-4 w-20 text-center">리밸런싱</th>
                   <th className="py-3 px-4">자산군 (Category)</th>
                   <th className="py-3 px-4">현재 비중 (평가액 기준)</th>
-                  <th className="py-3 px-4 w-32">목표 비중(%)</th>
+                  <th className="py-3 px-4 w-36">목표 비중(%)</th>
                   <th className="py-3 px-4 text-right">필요 액션 (현재 선택 통화 기준)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {["가상자산", "미국주식", "국내주식", "현금"].map((cat) => {
+                {ALL_CATEGORIES.map((cat) => {
+                  const isChecked = rebalanceEnabled[cat] !== false;
                   const currentAmount = currentCategoryMap[cat] || 0;
                   const currentWeight = totalValue > 0 ? (currentAmount / totalValue) * 100 : 0;
                   const targetW = targetWeights[cat] || 0;
@@ -993,23 +1081,55 @@ export default function PortfolioDashboard() {
                   const diff = targetAmount - currentAmount;
 
                   return (
-                    <tr key={cat} className="hover:bg-slate-50 transition-colors">
-                      <td className="py-3 px-4 font-bold text-slate-800">{cat}</td>
-                      <td className="py-3 px-4 text-slate-600">{currentWeight.toFixed(1)}%</td>
+                    <tr
+                      key={cat}
+                      className={`transition-all duration-200 ${
+                        isChecked
+                          ? "bg-white hover:bg-blue-50/30 text-slate-900 font-medium"
+                          : "bg-slate-200/75 opacity-40 text-slate-400 select-none"
+                      }`}
+                    >
+                      <td className="py-3 px-4 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleRebalanceCategory(cat)}
+                          className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
+                        />
+                      </td>
+                      <td className={`py-3 px-4 font-bold ${isChecked ? "text-slate-900" : "text-slate-500 line-through"}`}>
+                        {cat}
+                      </td>
+                      <td className="py-3 px-4">{currentWeight.toFixed(1)}%</td>
                       <td className="py-3 px-4">
                         <input
                           type="number"
-                          className="border border-slate-300 px-2 py-1.5 rounded-lg w-full focus:ring-2 focus:ring-blue-500 outline-none transition-all font-semibold"
+                          disabled={!isChecked}
+                          className={`border px-2.5 py-1.5 rounded-lg w-full outline-none transition-all font-bold ${
+                            isChecked
+                              ? "border-slate-300 bg-white text-slate-900 focus:ring-2 focus:ring-blue-500"
+                              : "border-slate-300 bg-slate-200 text-slate-400 cursor-not-allowed"
+                          }`}
                           value={targetW}
                           onChange={(e) => updateTargetWeight(cat, e.target.value)}
                         />
                       </td>
                       <td
                         className={`py-3 px-4 text-right font-black tracking-tight ${
-                          diff > 0 ? "text-blue-600" : diff < 0 ? "text-red-500" : "text-slate-400"
+                          !isChecked
+                            ? "text-slate-400"
+                            : diff > 0
+                            ? "text-blue-600"
+                            : diff < 0
+                            ? "text-rose-500"
+                            : "text-slate-400"
                         }`}
                       >
-                        {diff !== 0 ? `${diff > 0 ? "매수 " : "매도 "} ${formatCurrency(Math.abs(diff))}` : "-"}
+                        {!isChecked
+                          ? "리밸런싱 제외"
+                          : diff !== 0
+                          ? `${diff > 0 ? "매수 " : "매도 "} ${formatCurrency(Math.abs(diff))}`
+                          : "-"}
                       </td>
                     </tr>
                   );
@@ -1061,7 +1181,10 @@ export default function PortfolioDashboard() {
 
           <div className="flex justify-between items-center mb-4">
             <h4 className="text-sm font-bold text-slate-600">
-              자산 레코드 관리 테이블 <span className="text-xs font-normal text-slate-400">(현금 선택 시 매수 평단가는 입력 불필요하며 보유액만 입력)</span>
+              자산 레코드 관리 테이블{" "}
+              <span className="text-xs font-normal text-slate-400">
+                (현금 선택 시 매수 평단가는 입력 불필요하며 보유액만 입력)
+              </span>
             </h4>
             <div className="flex gap-2">
               <button
@@ -1069,7 +1192,7 @@ export default function PortfolioDashboard() {
                 disabled={isRefreshing}
                 className="bg-blue-600 text-white hover:bg-blue-700 px-3 py-1.5 rounded-md text-xs font-bold transition-colors shadow-sm"
               >
-                ↻ 전체 시세 & 거시지표 갱신
+                ↻ 전체 시세 & 환율 갱신
               </button>
               <button
                 onClick={addAsset}
@@ -1136,7 +1259,6 @@ export default function PortfolioDashboard() {
                           />
                         )}
                       </td>
-                      {/* 현금일 경우 매수 평단가 입력 불필요 처리 */}
                       <td className="py-2 px-2">
                         {isCash ? (
                           <span className="inline-block bg-slate-100 text-slate-400 px-2.5 py-1.5 rounded font-semibold">
@@ -1166,7 +1288,6 @@ export default function PortfolioDashboard() {
                           />
                         )}
                       </td>
-                      {/* 현금일 경우 현재 보유액을 직접 입력 가능 */}
                       <td className="py-2 px-2 font-mono text-slate-700 font-semibold">
                         {isCash ? (
                           <input
@@ -1226,7 +1347,29 @@ export default function PortfolioDashboard() {
               </tbody>
             </table>
           </div>
+
+          {/* 테이블 하단 시세 출처 및 기준 시각 안내 */}
+          <div className="mt-3 flex flex-col sm:flex-row justify-between items-start sm:items-center text-[11px] text-slate-400 gap-1 px-1">
+            <span>
+              * 현재 시세 출처: <strong>Yahoo Finance API</strong> (미국주식: NASDAQ/NYSE, 국내주식: KRX, 가상자산: CoinMarketCap/Yahoo) | 기준 시각:{" "}
+              <strong>{priceTimestamp} (KST)</strong>
+            </span>
+            <span>
+              * 환율 출처: <strong>{fxSource}</strong> | 환율 기준 시각: <strong>{fxTimestamp} (KST)</strong>
+            </span>
+          </div>
         </div>
+
+        {/* 페이지 최하단 글로벌 데이터 출처 및 기준 시각 푸터 */}
+        <footer className="text-center text-[11px] text-slate-400 pt-4 pb-8 border-t border-slate-200/80 space-y-1">
+          <p>
+            시세 및 지수 데이터 제공: <strong>Yahoo Finance (query1.finance.yahoo.com)</strong> · 실시간 환율 제공:{" "}
+            <strong>{fxSource}</strong>
+          </p>
+          <p>
+            최종 시세 동기화 기준: <strong>{priceTimestamp} KST</strong> | 최종 환율 동기화 기준: <strong>{fxTimestamp} KST</strong> (거래소별 최대 15분 지연 시세가 포함될 수 있습니다.)
+          </p>
+        </footer>
       </div>
     </div>
   );
