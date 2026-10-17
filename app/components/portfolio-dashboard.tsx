@@ -1,7 +1,12 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import type { PortfolioData } from "@/lib/portfolio-storage";
+import { validPortfolio, validChange } from '@/lib/portfolio-storage';
+import type { Asset, MonthlyHistory, PortfolioState, PortfolioData, ChangeEntry } from '@/lib/portfolio-types';
+import { appendChange } from '@/lib/portfolio-history';
+import DashboardSection, { DashboardNavigation, sections } from './dashboard-section';
+import ChangeHistory from './change-history';
+export type { Asset } from '@/lib/portfolio-types';
 import MobileAssetCards from './mobile-asset-cards';
 import {
   PieChart,
@@ -19,27 +24,6 @@ import {
 } from "recharts";
 
 // --- 1. 금융 데이터 인터페이스 정의 ---
-export interface Asset {
-  id: string;
-  category: string;
-  name: string;
-  quantity: number;
-  avgPriceUsd: number;
-  avgPriceKrw: number;
-  currentPriceUsd: number;
-  currentPriceKrw: number;
-  return1D?: number;
-  return1W?: number;
-  return1M?: number;
-  return1Y?: number;
-}
-
-interface MonthlyHistory {
-  date: string; // YYYY.MM.01 포맷
-  totalValueKrw: number;
-  totalPrincipalKrw: number;
-}
-
 interface IndexState {
   daily: number;
   yearly: number;
@@ -122,6 +106,37 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isFxRefreshing, setIsFxRefreshing] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [auditTrail, setAuditTrail] = useState<ChangeEntry[]>([]);
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+
+  const captureState = (): PortfolioState => ({ assets, history, goal, targetWeights, rebalanceEnabled, yesterdayValue, usdToKrw });
+  const recordChange = (label: string, group = '') => {
+    const before = captureState();
+    setAuditTrail(previous => appendChange(previous, label, before, group));
+  };
+  const applyState = (state: PortfolioState) => {
+    setAssets(state.assets); setHistory(state.history); setGoal(state.goal);
+    setTargetWeights(state.targetWeights); setRebalanceEnabled(state.rebalanceEnabled);
+    setYesterdayValue(state.yesterdayValue); setUsdToKrw(state.usdToKrw);
+  };
+  const restoreChange = (entry: ChangeEntry, confirm: boolean) => {
+    if (confirm && !window.confirm(`‘${entry.label}’ 직전으로 복원할까요? 이후에 바꾼 자산·월별 기록·설정도 함께 되돌아갑니다. 복원 작업도 변경 이력에 남습니다.`)) return;
+    recordChange(`‘${entry.label}’ 이전 상태로 복원`);
+    applyState(structuredClone(entry.before));
+  };
+  const toggleSection = (id: string) => setCollapsedSections(previous => ({ ...previous, [id]: !previous[id] }));
+  const navigateSection = (id: string) => {
+    setCollapsedSections(previous => ({ ...previous, [id]: false }));
+    requestAnimationFrame(() => {
+      const target = document.getElementById(id);
+      target?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
+      target?.focus({ preventScroll: true });
+    });
+  };
+
+  useEffect(() => {
+    if (isLoaded) localStorage.setItem(storagePrefix + 'vr_portfolio_collapsed', JSON.stringify(collapsedSections));
+  }, [collapsedSections, isLoaded, storagePrefix]);
 
   // JSON 파일 불러오기용 Ref
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -163,6 +178,10 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
 
   // --- 자산 업데이트 로직 ---
   const updateAsset = (id: string, field: keyof Asset, val: string | number) => {
+    const asset = assets.find(item => item.id === id);
+    if (!asset || String(asset[field]) === String(val)) return;
+    const labels: Partial<Record<keyof Asset, string>> = { name: '이름', category: '분류', quantity: '수량', avgPriceUsd: '달러 평단가', avgPriceKrw: '원화 평단가', currentPriceUsd: '달러 보유액', currentPriceKrw: '원화 보유액' };
+    recordChange(`${asset.name || '자산'} ${labels[field] || field} 수정`, `asset:${id}:${field}`);
     setAssets((prev) =>
       prev.map((a) => {
         if (a.id !== id) return a;
@@ -207,9 +226,15 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
     );
   };
 
-  const removeAsset = (id: string) => setAssets((prev) => prev.filter((a) => a.id !== id));
+  const removeAsset = (id: string) => {
+    const asset = assets.find(item => item.id === id);
+    if (!asset) return;
+    recordChange(`${asset.name || '자산'} 삭제`);
+    setAssets(prev => prev.filter(item => item.id !== id));
+  };
 
-  const addAsset = () =>
+  const addAsset = () => {
+    recordChange('자산 추가');
     setAssets((prev) => [
       ...prev,
       {
@@ -227,12 +252,17 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
         return1Y: 0,
       },
     ]);
+  };
 
-  const updateTargetWeight = (cat: string, val: string) =>
+  const updateTargetWeight = (cat: string, val: string) => {
+    recordChange(`${cat} 목표 비중 수정`, `weight:${cat}`);
     setTargetWeights((prev) => ({ ...prev, [cat]: Number(val) || 0 }));
+  };
 
-  const toggleRebalanceCategory = (cat: string) =>
+  const toggleRebalanceCategory = (cat: string) => {
+    recordChange(`${cat} 리밸런싱 ${rebalanceEnabled[cat] !== false ? '제외' : '포함'}`);
     setRebalanceEnabled((prev) => ({ ...prev, [cat]: !prev[cat] }));
+  };
 
   // --- 환율 적용 공통 헬퍼 함수 ---
   const applyNewExchangeRate = (newRate: number, sourceName: string, timeStr: string) => {
@@ -407,7 +437,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
   // --- 3. JSON 데이터 파일 백업(내보내기) 및 복원(불러오기) 기능 ---
   const handleExportJson = () => {
     const backupPayload = {
-      version: "2.0",
+      version: "3.0",
       exportedAt: new Date().toISOString(),
       assets,
       history,
@@ -416,6 +446,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
       rebalanceEnabled,
       yesterdayValue,
       usdToKrw,
+      auditTrail,
     };
     const blob = new Blob([JSON.stringify(backupPayload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -438,13 +469,12 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
     reader.onload = (event) => {
       try {
         const parsed = JSON.parse(String(event.target?.result || "{}"));
-        if (Array.isArray(parsed.assets)) setAssets(parsed.assets);
-        if (Array.isArray(parsed.history)) setHistory(parsed.history);
-        if (typeof parsed.goal === "number") setGoal(parsed.goal);
-        if (parsed.targetWeights && typeof parsed.targetWeights === "object") setTargetWeights(parsed.targetWeights);
-        if (parsed.rebalanceEnabled && typeof parsed.rebalanceEnabled === "object") setRebalanceEnabled(parsed.rebalanceEnabled);
-        if (typeof parsed.yesterdayValue === "number") setYesterdayValue(parsed.yesterdayValue);
-        if (typeof parsed.usdToKrw === "number" && parsed.usdToKrw > 900) setUsdToKrw(parsed.usdToKrw);
+        if (!validPortfolio(parsed)) throw new Error('Invalid backup');
+        const combined = [...auditTrail, ...(parsed.auditTrail || [])]
+          .filter((entry, index, all) => all.findIndex(item => item.id === entry.id) === index)
+          .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 29);
+        setAuditTrail(appendChange(combined, 'JSON 백업 불러오기', captureState()));
+        applyState(parsed);
         alert("백업 파일(.json) 데이터가 성공적으로 복원되었습니다.");
       } catch (err) {
         alert("유효하지 않은 백업 파일 형식입니다.");
@@ -463,6 +493,12 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
     const savedRebalEnabled = localStorage.getItem(storagePrefix + "vr_portfolio_rebal_enabled");
     const savedYest = localStorage.getItem(storagePrefix + "vr_portfolio_yesterday");
     const savedFx = localStorage.getItem(storagePrefix + "vr_portfolio_fx_rate");
+    try {
+      const savedAudit = JSON.parse(localStorage.getItem(storagePrefix + 'vr_portfolio_audit_trail') || '[]');
+      if (Array.isArray(savedAudit)) setAuditTrail(savedAudit.filter(validChange).slice(0, 30));
+      const savedCollapsed = JSON.parse(localStorage.getItem(storagePrefix + 'vr_portfolio_collapsed') || '{}');
+      if (savedCollapsed && typeof savedCollapsed === 'object' && !Array.isArray(savedCollapsed)) setCollapsedSections(savedCollapsed);
+    } catch { /* Invalid view preferences do not block loading the portfolio. */ }
 
     if (savedFx && Number(savedFx) > 900) {
       setUsdToKrw(Number(savedFx));
@@ -516,7 +552,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
       setHistory([]);
     }
 
-    if (savedGoal) setGoal(Number(savedGoal) || 10000000000);
+    if (savedGoal !== null && Number.isFinite(Number(savedGoal))) setGoal(Number(savedGoal));
     if (savedWeights) setTargetWeights(JSON.parse(savedWeights));
     if (savedRebalEnabled) {
       try {
@@ -540,9 +576,11 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
       localStorage.setItem(storagePrefix + "vr_portfolio_weights", JSON.stringify(targetWeights));
       localStorage.setItem(storagePrefix + "vr_portfolio_rebal_enabled", JSON.stringify(rebalanceEnabled));
       localStorage.setItem(storagePrefix + "vr_portfolio_yesterday", yesterdayValue.toString());
-      snapshotCallback.current?.({ assets, history, goal, targetWeights, rebalanceEnabled, yesterdayValue, usdToKrw });
+      localStorage.setItem(storagePrefix + 'vr_portfolio_audit_trail', JSON.stringify(auditTrail));
+      localStorage.setItem(storagePrefix + 'vr_portfolio_fx_rate', usdToKrw.toString());
+      snapshotCallback.current?.({ assets, history, goal, targetWeights, rebalanceEnabled, yesterdayValue, usdToKrw, auditTrail });
     }
-  }, [assets, history, goal, targetWeights, rebalanceEnabled, yesterdayValue, usdToKrw, isLoaded, storagePrefix]);
+  }, [assets, history, goal, targetWeights, rebalanceEnabled, yesterdayValue, usdToKrw, auditTrail, isLoaded, storagePrefix]);
 
   // --- 매달 1일 접속 시 총 자산 자동 스냅샷 기록 ---
   useEffect(() => {
@@ -699,6 +737,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
 
   // --- 월별 1일 자산 기록 관리 함수 ---
   const recordCurrentMonthAsset = () => {
+    recordChange('이번 달 자산 기록 저장');
     const now = new Date();
     const dateStr = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}.01`;
     setHistory((prev) => {
@@ -716,6 +755,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
 
   const handleManualHistoryAdd = () => {
     if (!manualDate.trim()) return;
+    recordChange(`${manualDate.trim()} 월별 기록 저장`);
     const valKrw = Number(manualValueKrw) || Math.round(totalValueKrw);
     const prinKrw = Number(manualPrincipalKrw) || Math.round(totalInvestmentKrw);
     setHistory((prev) => {
@@ -729,6 +769,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
   };
 
   const removeHistoryItem = (dateStr: string) => {
+    recordChange(`${dateStr} 월별 기록 삭제`);
     setHistory((prev) => prev.filter((h) => h.date !== dateStr));
   };
 
@@ -770,6 +811,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
       }
     });
     if (newAssets.length > 0) {
+      recordChange(`자산 ${newAssets.length}개 일괄 가져오기`);
       setAssets([...assets, ...newAssets]);
       setImportText("");
     }
@@ -835,8 +877,12 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
           </div>
         </header>
 
+        <DashboardNavigation onNavigate={navigateSection} onSetAll={collapsed => setCollapsedSections(Object.fromEntries(sections.map(([id]) => [id, collapsed])))} />
+        {auditTrail.length > 0 && <div className="change-undo-bar" role="status"><span>최근 변경: {auditTrail[0].label}</span><button onClick={() => restoreChange(auditTrail[0], false)}>↶ 최근 변경 취소</button></div>}
+
         {/* 요약 카드 4종 */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <DashboardSection id="summary" title="자산 요약" collapsed={!!collapsedSections.summary} onToggle={() => toggleSection("summary")} className="summary-section">
+<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60">
             <p className="text-slate-500 text-sm font-medium mb-2">총 평가 금액</p>
             <h2 className="text-3xl font-black text-slate-900">{formatCurrency(totalValue)}</h2>
@@ -859,7 +905,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                 type="number"
                 className="text-right text-xs border-b border-slate-300 w-24 focus:outline-none font-bold"
                 value={goal}
-                onChange={(e) => setGoal(Number(e.target.value))}
+                onChange={(e) => { recordChange('목표 자산 수정', 'goal'); setGoal(Number(e.target.value)); }}
               />
             </div>
             <div className="w-full bg-slate-100 rounded-full h-2.5 mb-1 overflow-hidden">
@@ -870,11 +916,12 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
             </p>
           </div>
         </div>
+</DashboardSection>
 
         {/* 일일 성과 및 거시지표 (내 포트폴리오도 일간 + 연간 성과로 나스닥/S&P500과 1:1 비교) */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60">
+        <DashboardSection id="performance" title="성과 및 거시지표" collapsed={!!collapsedSections['performance']} onToggle={() => toggleSection('performance')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
-            <h3 className="text-lg font-bold text-slate-800">일일·연간 성과 및 거시지표 비교 모니터링</h3>
+
             <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 p-2.5 rounded-lg border">
               <span className="text-blue-700 font-bold">
                 실시간 환율: 1$ = ₩{usdToKrw.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -897,7 +944,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                 type="number"
                 className="border border-slate-300 px-2 py-0.5 rounded text-sm w-32 font-bold focus:outline-none bg-white"
                 value={yesterdayValue}
-                onChange={(e) => setYesterdayValue(Number(e.target.value))}
+                onChange={(e) => { recordChange('어제 자산 총액 수정', 'yesterday'); setYesterdayValue(Number(e.target.value)); }}
               />
             </div>
           </div>
@@ -954,13 +1001,13 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
               </p>
             </div>
           </div>
-        </div>
+        </DashboardSection>
 
         {/* 히트맵 & 자산군 비중 */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-6 bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 h-[460px] flex flex-col">
+          <DashboardSection id="heatmap" title="포트폴리오 히트맵" collapsed={!!collapsedSections['heatmap']} onToggle={() => toggleSection('heatmap')} className="lg:col-span-6 bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 h-[460px] flex flex-col">
             <div className="flex flex-wrap justify-between items-center gap-2 mb-4">
-              <h3 className="text-lg font-bold text-slate-800">포트폴리오 히트맵</h3>
+
               <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
                 {(
                   [
@@ -992,11 +1039,11 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                 <div className="absolute inset-0 flex items-center justify-center text-slate-400">데이터가 없습니다.</div>
               )}
             </div>
-          </div>
+          </DashboardSection>
 
-          <div className="lg:col-span-6 bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 flex flex-col h-[460px]">
+          <DashboardSection id="allocation" title="자산군 비중" collapsed={!!collapsedSections['allocation']} onToggle={() => toggleSection('allocation')} className="lg:col-span-6 bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 flex flex-col h-[560px] sm:h-[500px]">
             <div className="mb-2">
-              <h3 className="text-lg font-bold text-slate-800">자산군 Allocation 비중 (평가액 vs 원금)</h3>
+
               <p className="text-xs text-slate-500">
                 각 영역에 커서를 올리면 해당 자산군 내 개별 종목이 <strong>내 총 자산 중 몇 %</strong>인지 표시됩니다.
               </p>
@@ -1056,14 +1103,14 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                 </div>
               </div>
             </div>
-          </div>
+          </DashboardSection>
         </div>
 
         {/* 매달 1일 총 자산 변화 추이 그래프 */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 flex flex-col space-y-4">
+        <DashboardSection id="trend" title="월별 자산 추이" collapsed={!!collapsedSections['trend']} onToggle={() => toggleSection('trend')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 flex flex-col space-y-4">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
-              <h3 className="text-lg font-bold text-slate-800">월별 총 자산 변화 추이 (매달 1일 기준)</h3>
+
               <p className="text-xs text-slate-500">
                 매달 1일 접속 시 총 자산이 자동 기록되며, 우측 버튼으로 이번 달 1일 기록을 즉시 갱신하거나 과거 월 데이터를 추가할 수 있습니다.
               </p>
@@ -1152,13 +1199,13 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
               ))}
             </div>
           </div>
-        </div>
+        </DashboardSection>
 
         {/* 목표 비중 리밸런싱 */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden flex flex-col">
+        <DashboardSection id="rebalance" title="목표 비중 리밸런싱" collapsed={!!collapsedSections['rebalance']} onToggle={() => toggleSection('rebalance')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden flex flex-col">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
             <div>
-              <h3 className="text-lg font-bold text-slate-800">목표 비중 리밸런싱 (Value Rebalancing)</h3>
+
               <p className="text-xs text-slate-500">
                 좌측 체크박스를 선택한 자산군만 선명하게 활성화되며, 체크 해제 시 어둡게 음영 처리되어 리밸런싱 계산에서 제외됩니다.
               </p>
@@ -1247,12 +1294,12 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
               </tbody>
             </table>
           </div>
-        </div>
+        </DashboardSection>
 
         {/* 보유 종목 데이터베이스 관리 */}
-        <div id="asset-manager" className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200/60 flex flex-col min-w-0">
+        <DashboardSection id="asset-manager" title="보유 종목 관리" collapsed={!!collapsedSections['asset-manager']} onToggle={() => toggleSection('asset-manager')} className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200/60 flex flex-col min-w-0">
           <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-6">
-            <h3 className="text-lg font-bold text-slate-800">보유 종목 데이터베이스 관리</h3>
+
             <button
               onClick={() => setIsImportOpen(!isImportOpen)}
               className="text-sm font-semibold text-blue-600 hover:text-blue-800 transition-colors bg-blue-50 px-3 py-1.5 rounded-lg"
@@ -1471,7 +1518,9 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
               * 환율 출처: <strong>{fxSource}</strong> | 환율 기준 시각: <strong>{fxTimestamp} (KST)</strong>
             </span>
           </div>
-        </div>
+        </DashboardSection>
+
+        <DashboardSection id="changes" title="삭제 취소 및 변경 이력" collapsed={!!collapsedSections.changes} onToggle={() => toggleSection('changes')} className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200/60 shadow-sm"><ChangeHistory entries={auditTrail} onRestore={restoreChange} /></DashboardSection>
 
         {/* 페이지 최하단 글로벌 데이터 출처 및 기준 시각 푸터 */}
         <footer className="text-center text-[11px] text-slate-400 pt-4 pb-8 border-t border-slate-200/80 space-y-1">

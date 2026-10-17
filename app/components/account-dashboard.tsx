@@ -157,11 +157,17 @@ function CloudPortfolio({ user, onLogout }: { user: User; onLogout: () => Promis
           else localStorage.removeItem(prefix + 'pendingRevision');
           setPending(stillDirty); setStatus(stillDirty ? '변경사항 저장 대기 중…' : '클라우드와 동기화됨');
         } else {
-          const { data, error } = await client.from('portfolios').select('data,revision').eq('user_id', user.id).single();
+          const { data, error } = await client.from('portfolios').select('revision').eq('user_id', user.id).single();
           if (error) throw error;
           if (!mounted.current) return;
           if (data.revision !== revision.current) {
-            if (JSON.stringify(current.current) === saved.current) apply(data.data, data.revision);
+            if (JSON.stringify(current.current) === saved.current) {
+              const { data: updated, error: readError } = await client.from('portfolios').select('data,revision').eq('user_id', user.id).single();
+              if (readError) throw readError;
+              if (!mounted.current) return;
+              if (JSON.stringify(current.current) === saved.current) apply(updated.data, updated.revision);
+              else { setConflict(true); setStatus('다른 기기의 변경과 겹쳤습니다. JSON 백업 후 최신 데이터를 불러와주세요.'); }
+            }
             else { setConflict(true); setStatus('다른 기기의 변경과 겹쳤습니다. JSON 백업 후 최신 데이터를 불러와주세요.'); }
           } else setStatus('클라우드와 동기화됨');
         }

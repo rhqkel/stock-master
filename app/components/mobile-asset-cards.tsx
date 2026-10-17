@@ -47,7 +47,7 @@ export default function MobileAssetCards({ assets, currency, onUpdate, onRefresh
         <div className="mobile-asset-actions">
           {!cash && <button disabled={refreshing} onClick={() => onRefresh(asset)}>↻ 시세 갱신</button>}
           <button className="mobile-asset-delete" onClick={() => {
-            if (window.confirm(`${asset.name || '이 자산'}을 삭제할까요? 삭제 후에는 JSON 백업으로 복원할 수 있습니다.`)) onRemove(asset.id);
+            if (window.confirm(`${asset.name || '이 자산'}을 삭제할까요? 삭제 후에는 변경 이력에서 되돌릴 수 있습니다.`)) onRemove(asset.id);
           }}>자산 삭제</button>
         </div>
       </article>;
