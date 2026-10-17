@@ -1,49 +1,66 @@
-import { NextResponse } from 'next/server';
+import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const ticker = searchParams.get('ticker');
+  const ticker = searchParams.get("ticker");
 
   if (!ticker) {
-    return NextResponse.json({ error: '티커 매개변수가 누락되었습니다.' }, { status: 400 });
+    return NextResponse.json({ error: "Ticker is required" }, { status: 400 });
   }
 
   try {
-    // 일일 및 연간 변동률 연산을 위해 1년(1y) 범위의 일간(1d) 데이터를 호출
-    const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?range=1y&interval=1d`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-      next: { revalidate: 60 } // 1분간 서버 캐싱하여 과도한 트래픽 방지
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=1y&interval=1d`;
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      },
+      next: { revalidate: 60 },
     });
 
-    if (!response.ok) throw new Error('Yahoo Finance API 통신 실패');
+    if (!response.ok) {
+      return NextResponse.json({ error: "Failed to fetch from Yahoo Finance" }, { status: response.status });
+    }
 
     const data = await response.json();
-    const result = data.chart.result?.[0];
-    
+    const result = data?.chart?.result?.[0];
+
     if (!result) {
-      return NextResponse.json({ error: '데이터를 찾을 수 없습니다.' }, { status: 404 });
+      return NextResponse.json({ error: "No chart data found" }, { status: 404 });
     }
 
     const meta = result.meta;
-    const currentPrice = meta.regularMarketPrice;
-    const prevClose = meta.chartPreviousClose;
+    const rawCloses: any[] = result.indicators?.quote?.[0]?.close || [];
+    const closes: number[] = rawCloses.filter((c: any) => typeof c === "number" && !isNaN(c));
 
-    // 1. 일일 변동률 계산
-    const dailyReturn = prevClose ? ((currentPrice - prevClose) / prevClose) * 100 : 0;
+    const currentPrice = Number(meta?.regularMarketPrice ?? closes[closes.length - 1] ?? 0);
 
-    // 2. 연간 변동률 계산 (1년 전 종가 데이터 추출)
-    const closePrices = result.indicators.quote[0].close || [];
-    const validPrices = closePrices.filter((p: any) => p !== null && p !== undefined);
-    const oneYearAgoPrice = validPrices[0] || currentPrice;
-    const yearlyReturn = ((currentPrice - oneYearAgoPrice) / oneYearAgoPrice) * 100;
+    // 1. 일단위 (1D) 변동률
+    const prevClose1D = closes.length >= 2 ? closes[closes.length - 2] : (meta?.chartPreviousClose || currentPrice);
+    const dailyReturn = prevClose1D > 0 ? ((currentPrice - prevClose1D) / prevClose1D) * 100 : 0;
+
+    // 2. 주단위 (1W, 약 5거래일 전) 변동률
+    const idx1W = Math.max(0, closes.length - 6);
+    const prevClose1W = closes[idx1W] || currentPrice;
+    const weeklyReturn = prevClose1W > 0 ? ((currentPrice - prevClose1W) / prevClose1W) * 100 : 0;
+
+    // 3. 월단위 (1M, 약 21거래일 전) 변동률
+    const idx1M = Math.max(0, closes.length - 22);
+    const prevClose1M = closes[idx1M] || currentPrice;
+    const monthlyReturn = prevClose1M > 0 ? ((currentPrice - prevClose1M) / prevClose1M) * 100 : 0;
+
+    // 4. 연단위 (1Y, 1년 전 첫 거래일) 변동률
+    const prevClose1Y = closes[0] || meta?.chartPreviousClose || currentPrice;
+    const yearlyReturn = prevClose1Y > 0 ? ((currentPrice - prevClose1Y) / prevClose1Y) * 100 : 0;
 
     return NextResponse.json({
       price: currentPrice,
-      dailyReturn: isNaN(dailyReturn) ? 0 : dailyReturn,
-      yearlyReturn: isNaN(yearlyReturn) ? 0 : yearlyReturn
+      dailyReturn,
+      weeklyReturn,
+      monthlyReturn,
+      yearlyReturn,
     });
   } catch (error) {
-    console.error("오류 발생:", error);
-    return NextResponse.json({ error: '시세 및 지수 데이터 추출 파싱 실패' }, { status: 500 });
+    console.error("Price API Error:", error);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }
