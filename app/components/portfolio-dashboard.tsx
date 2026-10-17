@@ -607,18 +607,21 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
 
   const currentPieData = Object.keys(currentCategoryMap)
     .map((key) => ({ name: key, value: currentCategoryMap[key] }))
-    .filter((d) => d.value > 0);
+    .filter((d) => d.value > 0 && rebalanceEnabled[d.name] !== false);
 
   const principalPieData = Object.keys(principalCategoryMap)
     .map((key) => ({ name: key, value: principalCategoryMap[key] }))
-    .filter((d) => d.value > 0);
+    .filter((d) => d.value > 0 && rebalanceEnabled[d.name] !== false);
+
+  const allocationCurrentTotal = currentPieData.reduce((sum, item) => sum + item.value, 0);
+  const allocationPrincipalTotal = principalPieData.reduce((sum, item) => sum + item.value, 0);
 
   // --- 자산군 비중 도넛 차트 커스텀 툴팁 ---
   const CustomPieTooltip = ({ active, payload, mode }: any) => {
     if (!active || !payload || !payload.length) return null;
     const categoryName = payload[0].name;
     const categoryVal = Number(payload[0].value) || 0;
-    const baseTotal = mode === "current" ? totalValue : totalInvestment;
+    const baseTotal = mode === "current" ? allocationCurrentTotal : allocationPrincipalTotal;
     const categoryShare = baseTotal > 0 ? (categoryVal / baseTotal) * 100 : 0;
 
     const categoryAssets = assets
@@ -647,7 +650,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
           </span>
         </div>
         <p className="text-[11px] text-slate-400 mb-1.5 font-semibold">
-          내 총 자산({mode === "current" ? "평가액" : "원금"}) 대비 종목별 비중:
+          선택한 자산({mode === "current" ? "평가액" : "원금"}) 대비 종목별 비중:
         </p>
         <div className="space-y-1">
           {categoryAssets.map((item, idx) => (
@@ -995,7 +998,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
             <div className="mb-2">
 
               <p className="text-xs text-slate-500">
-                각 영역에 커서를 올리면 해당 자산군 내 개별 종목이 <strong>내 총 자산 중 몇 %</strong>인지 표시됩니다.
+                목표 비중 리밸런싱에서 체크한 자산군만 표시합니다. 비중은 <strong>선택한 자산군 합계 기준</strong>이며, 각 영역에 커서를 올리면 종목별 비중을 볼 수 있습니다.
               </p>
             </div>
             <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2 min-h-[340px]">
@@ -1004,7 +1007,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                   평가액 기준 비중
                 </span>
                 <div className="w-full flex-1">
-                  <ResponsiveContainer width="100%" height="100%">
+                  {currentPieData.length === 0 ? <p className="text-xs text-slate-500 text-center pt-16">선택한 자산군의 평가액이 없습니다.</p> : <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
                         data={currentPieData}
@@ -1022,7 +1025,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                       </Pie>
                       <RechartsTooltip content={(props: any) => <CustomPieTooltip {...props} mode="current" />} />
                     </PieChart>
-                  </ResponsiveContainer>
+                  </ResponsiveContainer>}
                 </div>
               </div>
 
@@ -1031,7 +1034,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                   원금 기준 비중
                 </span>
                 <div className="w-full flex-1">
-                  <ResponsiveContainer width="100%" height="100%">
+                  {principalPieData.length === 0 ? <p className="text-xs text-slate-500 text-center pt-16">선택한 자산군의 원금이 없습니다.</p> : <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
                         data={principalPieData}
@@ -1049,7 +1052,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                       </Pie>
                       <RechartsTooltip content={(props: any) => <CustomPieTooltip {...props} mode="principal" />} />
                     </PieChart>
-                  </ResponsiveContainer>
+                  </ResponsiveContainer>}
                 </div>
               </div>
             </div>
