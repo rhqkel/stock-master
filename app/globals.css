@@ -48,3 +48,51 @@ button:focus-visible, input:focus-visible { outline: 3px solid #60a5fa; outline-
   .account-card { padding: 24px; }
   input, select, textarea { font-size: 16px !important; }
 }
+
+body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+.pwa-install { background: #eff6ff; color: #0f172a; padding: 12px max(16px, calc((100vw - 1400px) / 2)); border-bottom: 1px solid #dbeafe; }
+.pwa-install-row { display: flex; align-items: center; gap: 12px; }
+.pwa-install-row > div { flex: 1; min-width: 0; }
+.pwa-install strong { font-size: 14px; }
+.pwa-install p { font-size: 12px; line-height: 1.65; color: #475569; }
+.pwa-install-button { min-height: 44px; border-radius: 10px; background: #2563eb; color: white; padding: 10px 14px; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+.pwa-install-close { min-width: 32px; min-height: 44px; color: #64748b; font-size: 24px; }
+.pwa-install-help { padding-top: 12px; max-width: 660px; }
+.pwa-install-help p + p { margin-top: 8px; }
+.mobile-asset-list { display: grid; gap: 14px; }
+.mobile-asset-card { min-width: 0; padding: 18px; border: 1px solid #e2e8f0; border-radius: 18px; background: #fff; box-shadow: 0 2px 8px #0f172a04; }
+.mobile-asset-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+.mobile-asset-heading > div { min-width: 0; }
+.mobile-asset-heading h4 { font-size: 19px; font-weight: 800; margin-top: 7px; overflow-wrap: anywhere; }
+.mobile-category { display: inline-block; font-size: 11px; font-weight: 700; color: #475569; background: #f1f5f9; padding: 4px 8px; border-radius: 6px; }
+.mobile-asset-quantity { color: #64748b; font-size: 12px; text-align: right; overflow-wrap: anywhere; max-width: 45%; }
+.mobile-asset-value { font-size: clamp(22px, 6vw, 28px); font-weight: 800; letter-spacing: -.04em; margin-top: 18px; overflow-wrap: anywhere; }
+.mobile-profit-positive { color: #047857; font-size: 13px; font-weight: 700; margin-top: 4px; overflow-wrap: anywhere; }
+.mobile-profit-negative { color: #e11d48; font-size: 13px; font-weight: 700; margin-top: 4px; overflow-wrap: anywhere; }
+.mobile-asset-price { font-size: 12px; color: #64748b; margin-top: 8px; overflow-wrap: anywhere; }
+.mobile-asset-edit { margin-top: 18px; border-top: 1px solid #f1f5f9; }
+.mobile-asset-edit summary { list-style: none; display: flex; justify-content: space-between; align-items: center; min-height: 48px; cursor: pointer; color: #334155; font-size: 13px; font-weight: 700; }
+.mobile-asset-edit summary::-webkit-details-marker { display: none; }
+.mobile-asset-edit summary:focus-visible { outline: 3px solid #60a5fa; outline-offset: 2px; }
+.mobile-asset-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; padding: 8px 0; }
+.mobile-asset-fields label { min-width: 0; display: grid; gap: 6px; color: #475569; font-size: 12px; font-weight: 600; }
+.mobile-asset-fields input, .mobile-asset-fields select { width: 100%; min-width: 0; min-height: 46px; border: 1px solid #cbd5e1; padding: 10px; border-radius: 9px; font-size: 16px; color: #0f172a; background: #f8fafc; }
+.mobile-asset-hint { font-size: 11px; color: #64748b; padding: 5px 0 14px; }
+.mobile-asset-actions { display: flex; gap: 8px; }
+.mobile-asset-actions button { min-height: 44px; padding: 10px 14px; background: #eff6ff; border-radius: 9px; color: #1d4ed8; font-size: 12px; font-weight: 700; }
+.mobile-asset-actions .mobile-asset-delete { margin-left: auto; color: #be123c; background: #fff1f2; }
+.mobile-assets-empty { padding: 28px 16px; border: 1px dashed #cbd5e1; border-radius: 14px; text-align: center; color: #64748b; line-height: 1.9; font-size: 14px; }
+@media (max-width: 767px) {
+  .portfolio-dashboard .grid > * { min-width: 0; }
+  .portfolio-dashboard .text-3xl { overflow-wrap: anywhere; }
+  .asset-manager-buttons { width: 100%; }
+  .asset-manager-buttons button { flex: 1; min-height: 46px; }
+  .portfolio-dashboard { padding-bottom: calc(32px + env(safe-area-inset-bottom)); }
+}
+@media (max-width: 380px) {
+  .pwa-install-row { flex-wrap: wrap; gap: 8px; }
+  .pwa-install-row > div { flex-basis: calc(100% - 40px); }
+  .pwa-install-close { order: -1; }
+  .pwa-install-button { flex: 1; }
+  .mobile-asset-fields { grid-template-columns: minmax(0,1fr); }
+}

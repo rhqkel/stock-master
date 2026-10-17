@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import type { PortfolioData } from "@/lib/portfolio-storage";
+import MobileAssetCards from './mobile-asset-cards';
 import {
   PieChart,
   Pie,
@@ -18,7 +19,7 @@ import {
 } from "recharts";
 
 // --- 1. 금융 데이터 인터페이스 정의 ---
-interface Asset {
+export interface Asset {
   id: string;
   category: string;
   name: string;
@@ -775,7 +776,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-800 pb-16">
+    <div className="portfolio-dashboard min-h-screen min-w-0 bg-slate-50 p-4 md:p-8 font-sans text-slate-800 pb-16">
       <div className="max-w-[1400px] mx-auto space-y-6">
         {/* 상단 헤더 & 백업/복원 & 시세 새로고침 버튼 */}
         <header className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
@@ -1249,8 +1250,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
         </div>
 
         {/* 보유 종목 데이터베이스 관리 */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60 flex flex-col">
-          <div className="flex justify-between items-center mb-6">
+        <div id="asset-manager" className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200/60 flex flex-col min-w-0">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-6">
             <h3 className="text-lg font-bold text-slate-800">보유 종목 데이터베이스 관리</h3>
             <button
               onClick={() => setIsImportOpen(!isImportOpen)}
@@ -1288,14 +1289,14 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
             </div>
           )}
 
-          <div className="flex justify-between items-center mb-4">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-4">
             <h4 className="text-sm font-bold text-slate-600">
-              자산 레코드 관리 테이블{" "}
+              내 자산 {assets.length}개{" "}
               <span className="text-xs font-normal text-slate-400">
                 (현금 선택 시 매수 평단가는 입력 불필요하며 보유액만 입력)
               </span>
             </h4>
-            <div className="flex gap-2">
+            <div className="flex gap-2 asset-manager-buttons">
               <button
                 onClick={fetchAllPrices}
                 disabled={isRefreshing}
@@ -1307,12 +1308,15 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                 onClick={addAsset}
                 className="bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-1.5 rounded-md text-xs font-bold transition-colors shadow-sm"
               >
-                + 단일 자산 추가
+                + 자산 추가
               </button>
             </div>
           </div>
 
-          <div className="overflow-x-auto max-h-[500px] overflow-y-auto rounded-lg border border-slate-200">
+          <div className="md:hidden"><MobileAssetCards assets={assets} currency={currency} onUpdate={updateAsset}
+            onRemove={removeAsset} refreshing={isRefreshing}
+            onRefresh={asset => { void fetchCurrentPrice(asset.id, asset.category, asset.name, usdToKrw); }} /></div>
+          <div className="hidden md:block overflow-x-auto max-h-[500px] overflow-y-auto rounded-lg border border-slate-200">
             <table className="w-full text-xs text-left whitespace-nowrap">
               <thead className="bg-slate-100 text-slate-600 uppercase font-semibold sticky top-0 z-10 shadow-sm">
                 <tr>
