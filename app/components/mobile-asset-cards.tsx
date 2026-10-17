@@ -1,6 +1,7 @@
 "use client";
 
 import type { Asset } from './portfolio-dashboard';
+import { PrivateNumberInput, useAmountPrivacy } from './amount-privacy';
 
 type Props = {
   assets: Asset[];
@@ -14,6 +15,7 @@ type Props = {
 const number = (value: number) => value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
 
 export default function MobileAssetCards({ assets, currency, onUpdate, onRefresh, onRemove, refreshing }: Props) {
+  const hidden = useAmountPrivacy();
   if (!assets.length) return <div className="mobile-assets-empty">아직 등록한 자산이 없어요.<br />위의 ‘자산 추가’로 첫 자산을 등록하세요.</div>;
   return <div className="mobile-asset-list">
     {assets.map(asset => {
@@ -23,13 +25,13 @@ export default function MobileAssetCards({ assets, currency, onUpdate, onRefresh
       const value = price * asset.quantity;
       const profit = (price - average) * asset.quantity;
       const rate = !cash && average > 0 ? (price - average) / average * 100 : 0;
-      const money = (v: number) => `${currency === 'USD' ? '$' : '₩'}${number(v)}`;
-      const input = (field: keyof Asset, label: string) => <label key={field}>{label}<input
-        type="number" inputMode="decimal" step="any" min="0" value={Number(asset[field]) || 0}
+      const money = (v: number) => hidden ? '••••' : `${currency === 'USD' ? '$' : '₩'}${number(v)}`;
+      const input = (field: keyof Asset, label: string) => <label key={field}>{label}<PrivateNumberInput
+        inputMode="decimal" step="any" min="0" value={Number(asset[field]) || 0}
         onChange={event => onUpdate(asset.id, field, event.target.value)} /></label>;
       return <article className="mobile-asset-card" key={asset.id} aria-label={`${asset.name} 자산`}>
         <div className="mobile-asset-heading"><div><span className="mobile-category">{asset.category}</span><h4>{asset.name || '이름 없는 자산'}</h4></div>
-          <span className="mobile-asset-quantity">{cash ? '현금' : `${number(asset.quantity)} 보유`}</span></div>
+          <span className="mobile-asset-quantity">{cash ? `${asset.cashCurrency === 'USD' ? '달러' : '원화'} 현금` : hidden ? '수량 숨김' : `${number(asset.quantity)} 보유`}</span></div>
         <p className="mobile-asset-value">{money(value)}</p>
         <p className={profit >= 0 ? 'mobile-profit-positive' : 'mobile-profit-negative'}>{cash ? '현금 보유액' : `평단 대비 ${profit >= 0 ? '+' : ''}${money(profit)} (${rate >= 0 ? '+' : ''}${rate.toFixed(2)}%)`}</p>
         {!cash && <p className="mobile-asset-price">현재가 {money(price)} · 평단가 {money(average)}</p>}
@@ -39,7 +41,7 @@ export default function MobileAssetCards({ assets, currency, onUpdate, onRefresh
               {['가상자산', '미국주식', '국내주식', '현금'].map(category => <option key={category}>{category}</option>)}
             </select></label>
             <label>종목명 / 현금 명칭<input value={asset.name} autoCapitalize="characters" onChange={e => onUpdate(asset.id, 'name', e.target.value)} /></label>
-            {cash ? <>{input('currentPriceKrw', '현금 보유액 (원)')}{input('currentPriceUsd', '현금 보유액 (달러)')}</> : <>
+            {cash ? <><label>현금 기준 통화<select value={asset.cashCurrency || 'KRW'} onChange={e => onUpdate(asset.id, 'cashCurrency', e.target.value)}><option value="KRW">원화 보유액 유지</option><option value="USD">달러 보유액 유지</option></select></label>{input('currentPriceKrw', '현금 보유액 (원)')}{input('currentPriceUsd', '현금 보유액 (달러)')}</> : <>
               {input('quantity', '보유 수량')}{input('avgPriceKrw', '매수 평단가 (원)')}{input('avgPriceUsd', '매수 평단가 (달러)')}
             </>}
           </div><p className="mobile-asset-hint">수정한 내용은 자동 저장됩니다.</p>

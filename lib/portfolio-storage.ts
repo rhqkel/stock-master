@@ -21,6 +21,7 @@ export function validState(value: unknown): value is PortfolioState {
     && Object.values(v).every(n => kind === 'number' ? finite(n) : typeof n === 'boolean');
   return Array.isArray(p.assets) && p.assets.every(a => a && typeof a === 'object'
     && ['id', 'category', 'name'].every(k => typeof a[k] === 'string')
+    && (a.cashCurrency === undefined || a.cashCurrency === 'KRW' || a.cashCurrency === 'USD')
     && ['quantity', 'avgPriceUsd', 'avgPriceKrw', 'currentPriceUsd', 'currentPriceKrw'].every(k => finite(a[k])))
     && Array.isArray(p.history) && p.history.every(h => h && typeof h.date === 'string' && finite(h.totalValueKrw) && finite(h.totalPrincipalKrw))
     && finite(p.goal) && finite(p.usdToKrw) && Number(p.usdToKrw) > 0 && finite(p.yesterdayValue)

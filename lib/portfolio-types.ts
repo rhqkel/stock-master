@@ -7,6 +7,7 @@ export interface Asset {
   avgPriceKrw: number;
   currentPriceUsd: number;
   currentPriceKrw: number;
+  cashCurrency?: 'KRW' | 'USD';
   return1D?: number;
   return1W?: number;
   return1M?: number;

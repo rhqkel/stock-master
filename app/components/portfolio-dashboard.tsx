@@ -6,6 +6,8 @@ import type { Asset, MonthlyHistory, PortfolioState, PortfolioData, ChangeEntry 
 import { appendChange } from '@/lib/portfolio-history';
 import DashboardSection, { DashboardNavigation, sections } from './dashboard-section';
 import ChangeHistory from './change-history';
+import { revalueAsset, editAsset, selectAssets, type AssetSort } from '@/lib/asset-calculations';
+import { AmountPrivacy, PrivateNumberInput } from './amount-privacy';
 export type { Asset } from '@/lib/portfolio-types';
 import MobileAssetCards from './mobile-asset-cards';
 import {
@@ -106,6 +108,12 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isFxRefreshing, setIsFxRefreshing] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [hideAmounts, setHideAmounts] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [assetCategory, setAssetCategory] = useState('전체');
+  const [assetSort, setAssetSort] = useState<AssetSort>('registered');
+  const resetAssetFilters = () => { setSearchQuery(''); setAssetCategory('전체'); setAssetSort('registered'); };
+  useEffect(() => { if (isLoaded) localStorage.setItem(storagePrefix + 'vr_portfolio_private', String(hideAmounts)); }, [hideAmounts, isLoaded, storagePrefix]);
   const [auditTrail, setAuditTrail] = useState<ChangeEntry[]>([]);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
 
@@ -151,6 +159,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
       const d = typeof isoOrDate === "string" ? new Date(isoOrDate) : isoOrDate;
       if (isNaN(d.getTime())) return "-";
       return d.toLocaleString("ko-KR", {
+        timeZone: "Asia/Seoul",
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
@@ -171,59 +180,19 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
 
   const formatNum = (num: any) => {
     const val = Number(num);
+    if (hideAmounts) return '••••';
     return isNaN(val) ? "0" : val.toLocaleString(undefined, { maximumFractionDigits: 2 });
   };
 
-  const formatCurrency = (num: any) => (currency === "USD" ? `$${formatNum(num)}` : `₩${formatNum(num)}`);
+  const formatCurrency = (num: any) => hideAmounts ? '••••' : (currency === "USD" ? `$${formatNum(num)}` : `₩${formatNum(num)}`);
 
   // --- 자산 업데이트 로직 ---
   const updateAsset = (id: string, field: keyof Asset, val: string | number) => {
     const asset = assets.find(item => item.id === id);
     if (!asset || String(asset[field]) === String(val)) return;
-    const labels: Partial<Record<keyof Asset, string>> = { name: '이름', category: '분류', quantity: '수량', avgPriceUsd: '달러 평단가', avgPriceKrw: '원화 평단가', currentPriceUsd: '달러 보유액', currentPriceKrw: '원화 보유액' };
+    const labels: Partial<Record<keyof Asset, string>> = { name: '이름', category: '분류', quantity: '수량', avgPriceUsd: '달러 평단가', avgPriceKrw: '원화 평단가', currentPriceUsd: '달러 보유액', currentPriceKrw: '원화 보유액', cashCurrency: '현금 기준 통화' };
     recordChange(`${asset.name || '자산'} ${labels[field] || field} 수정`, `asset:${id}:${field}`);
-    setAssets((prev) =>
-      prev.map((a) => {
-        if (a.id !== id) return a;
-        const updated: Asset = { ...a, [field]: val };
-
-        if (["quantity", "avgPriceUsd", "avgPriceKrw", "currentPriceUsd", "currentPriceKrw"].includes(field)) {
-          (updated as any)[field] = Number(val) || 0;
-        }
-
-        if (field === "category" && val === "현금") {
-          const baseUsd = updated.currentPriceUsd > 0 ? updated.currentPriceUsd : updated.avgPriceUsd * (updated.quantity || 1);
-          const baseKrw = updated.currentPriceKrw > 0 ? updated.currentPriceKrw : updated.avgPriceKrw * (updated.quantity || 1);
-          updated.quantity = 1;
-          updated.currentPriceUsd = baseUsd;
-          updated.avgPriceUsd = baseUsd;
-          updated.currentPriceKrw = baseKrw;
-          updated.avgPriceKrw = baseKrw;
-          updated.return1D = 0;
-          updated.return1W = 0;
-          updated.return1M = 0;
-          updated.return1Y = 0;
-          return updated;
-        }
-
-        if (updated.category === "현금") {
-          updated.quantity = 1;
-          if (field === "currentPriceUsd") {
-            updated.currentPriceKrw = Number(val) * usdToKrw;
-          } else if (field === "currentPriceKrw") {
-            updated.currentPriceUsd = Number(val) / usdToKrw;
-          }
-          updated.avgPriceUsd = updated.currentPriceUsd;
-          updated.avgPriceKrw = updated.currentPriceKrw;
-          return updated;
-        }
-
-        if (field === "avgPriceUsd") updated.avgPriceKrw = Number(val) * usdToKrw;
-        if (field === "avgPriceKrw") updated.avgPriceUsd = Number(val) / usdToKrw;
-
-        return updated;
-      })
-    );
+    setAssets(previous => previous.map(item => item.id === id ? editAsset(item, field, val, usdToKrw) : item));
   };
 
   const removeAsset = (id: string) => {
@@ -235,6 +204,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
 
   const addAsset = () => {
     recordChange('자산 추가');
+    resetAssetFilters();
     setAssets((prev) => [
       ...prev,
       {
@@ -271,34 +241,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
     setFxTimestamp(formatKstDateTime(timeStr));
     localStorage.setItem(storagePrefix + "vr_portfolio_fx_rate", newRate.toString());
 
-    setAssets((prev) =>
-      prev.map((a) => {
-        if (a.category === "미국주식" || a.category === "가상자산") {
-          return {
-            ...a,
-            avgPriceKrw: a.avgPriceUsd * newRate,
-            currentPriceKrw: a.currentPriceUsd * newRate,
-          };
-        } else if (a.category === "국내주식") {
-          return {
-            ...a,
-            avgPriceUsd: a.avgPriceKrw / newRate,
-            currentPriceUsd: a.currentPriceKrw / newRate,
-          };
-        } else if (a.category === "현금") {
-          const krwVal = a.currentPriceKrw > 0 ? a.currentPriceKrw : a.currentPriceUsd * newRate;
-          const usdVal = krwVal / newRate;
-          return {
-            ...a,
-            avgPriceKrw: krwVal,
-            currentPriceKrw: krwVal,
-            avgPriceUsd: usdVal,
-            currentPriceUsd: usdVal,
-          };
-        }
-        return a;
-      })
-    );
+    setAssets(previous => previous.map(asset => revalueAsset(asset, newRate)));
   };
 
   // --- 실시간 환율 동기화 (서버 API 호출 + 실패 시 클라이언트 직접 호출 이중 보장) ---
@@ -493,6 +436,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
     const savedRebalEnabled = localStorage.getItem(storagePrefix + "vr_portfolio_rebal_enabled");
     const savedYest = localStorage.getItem(storagePrefix + "vr_portfolio_yesterday");
     const savedFx = localStorage.getItem(storagePrefix + "vr_portfolio_fx_rate");
+    setHideAmounts(localStorage.getItem(storagePrefix + "vr_portfolio_private") === "true");
     try {
       const savedAudit = JSON.parse(localStorage.getItem(storagePrefix + 'vr_portfolio_audit_trail') || '[]');
       if (Array.isArray(savedAudit)) setAuditTrail(savedAudit.filter(validChange).slice(0, 30));
@@ -517,6 +461,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
           return {
             id: a.id || Date.now().toString(),
             category: a.category || "현금",
+            cashCurrency: a.cashCurrency === "USD" || (!a.cashCurrency && curKrw === 0 && curUsd > 0) ? "USD" : "KRW",
             name: a.name || "",
             quantity: isCash ? 1 : Number(a.quantity) || 0,
             avgPriceUsd: isCash ? curUsd : Number(a.avgPriceUsd) || 0,
@@ -604,6 +549,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
 
   if (!isLoaded) return <div className="flex items-center justify-center min-h-screen font-bold">인프라 금융망 연동 중...</div>;
 
+  const visibleAssets = selectAssets(assets, searchQuery, assetCategory, assetSort, currency);
+
   // --- 핵심 지표 연산 ---
   const totalInvestmentKrw = assets.reduce((sum, a) => sum + a.quantity * a.avgPriceKrw, 0);
   const totalValueKrw = assets.reduce((sum, a) => sum + a.quantity * a.currentPriceKrw, 0);
@@ -635,8 +582,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
       ? ((totalValue - getDisplayPrice(yesterdayValue)) / getDisplayPrice(yesterdayValue)) * 100
       : weightedDailyReturn;
 
-  // 내 포트폴리오 연간 성과 (보유 종목 가중평균 1Y 수익률 - 나스닥/S&P500 연간 성과와 1:1 직접 비교용)
-  const portfolioYearlyReturn =
+  // Reference only: current holdings weights × security 1Y price changes, without ownership dates or cash flows.
+  const currentCompositionYearlyChange =
     totalValueKrw > 0
       ? assets.reduce((sum, a) => {
           const weight = (a.quantity * a.currentPriceKrw) / totalValueKrw;
@@ -812,13 +759,14 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
     });
     if (newAssets.length > 0) {
       recordChange(`자산 ${newAssets.length}개 일괄 가져오기`);
+      resetAssetFilters();
       setAssets([...assets, ...newAssets]);
       setImportText("");
     }
   };
 
   return (
-    <div className="portfolio-dashboard min-h-screen min-w-0 bg-slate-50 p-4 md:p-8 font-sans text-slate-800 pb-16">
+    <AmountPrivacy.Provider value={hideAmounts}><div className="portfolio-dashboard min-h-screen min-w-0 bg-slate-50 p-4 md:p-8 font-sans text-slate-800 pb-16">
       <div className="max-w-[1400px] mx-auto space-y-6">
         {/* 상단 헤더 & 백업/복원 & 시세 새로고침 버튼 */}
         <header className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
@@ -829,6 +777,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <button className="privacy-toggle" aria-pressed={hideAmounts} onClick={() => setHideAmounts(value => !value)}>{hideAmounts ? '◉ 금액 표시' : '◎ 금액 숨기기'}</button>
             {/* JSON 백업 내보내기 & 불러오기 버튼 */}
             <button
               onClick={handleExportJson}
@@ -901,8 +850,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60">
             <div className="flex justify-between items-center mb-2">
               <p className="text-slate-500 text-sm font-medium">목표 자산 달성률</p>
-              <input
-                type="number"
+              <PrivateNumberInput
+
                 className="text-right text-xs border-b border-slate-300 w-24 focus:outline-none font-bold"
                 value={goal}
                 onChange={(e) => { recordChange('목표 자산 수정', 'goal'); setGoal(Number(e.target.value)); }}
@@ -918,7 +867,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
         </div>
 </DashboardSection>
 
-        {/* 일일 성과 및 거시지표 (내 포트폴리오도 일간 + 연간 성과로 나스닥/S&P500과 1:1 비교) */}
+        {/* 평가액 증감과 종목 가격 등락 참고 지표 */}
         <DashboardSection id="performance" title="성과 및 거시지표" collapsed={!!collapsedSections['performance']} onToggle={() => toggleSection('performance')} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/60">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
 
@@ -940,8 +889,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
               </button>
               <span className="mx-1 text-slate-300">|</span>
               <label>어제 자산 총액(₩) 기입:</label>
-              <input
-                type="number"
+              <PrivateNumberInput
+
                 className="border border-slate-300 px-2 py-0.5 rounded text-sm w-32 font-bold focus:outline-none bg-white"
                 value={yesterdayValue}
                 onChange={(e) => { recordChange('어제 자산 총액 수정', 'yesterday'); setYesterdayValue(Number(e.target.value)); }}
@@ -949,22 +898,23 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-            {/* 내 포트폴리오 성과: 일간 & 연간(1Y) 비교 + 평단대비 누적 병기 */}
+            {/* Reference price changes are distinct from actual account returns. */}
             <div className="p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-100 shadow-inner">
-              <p className="text-xs font-extrabold text-blue-800 uppercase tracking-wider mb-1">내 포트폴리오 성과</p>
+              <p className="text-xs font-extrabold text-blue-800 uppercase tracking-wider mb-1">내 자산 증감 · 참고 지표</p>
               <div className="space-y-0.5">
                 <p className={`text-xl font-black ${dailyReturn >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                  일간: {dailyReturn >= 0 ? "+" : ""}
+                  {yesterdayValue > 0 ? "어제 자산 대비 증감" : "현재 구성 일간 등락(참고)"}: {dailyReturn >= 0 ? "+" : ""}
                   {dailyReturn.toFixed(2)}%
                 </p>
-                <p className={`text-xs font-bold ${portfolioYearlyReturn >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                  연간: {portfolioYearlyReturn >= 0 ? "+" : ""}
-                  {portfolioYearlyReturn.toFixed(2)}%{" "}
+                <p className={`text-xs font-bold ${currentCompositionYearlyChange >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                  현재 구성 1년 등락(참고): {currentCompositionYearlyChange >= 0 ? "+" : ""}
+                  {currentCompositionYearlyChange.toFixed(2)}%{" "}
                   <span className="text-[11px] text-slate-500 font-semibold">
-                    (누적: {totalProfitRate >= 0 ? "+" : ""}
+                    (평단 대비: {totalProfitRate >= 0 ? "+" : ""}
                     {totalProfitRate.toFixed(1)}%)
                   </span>
                 </p>
+                <p className="text-[11px] text-slate-500 leading-relaxed pt-2">현재 구성 등락은 종목별 가격 등락의 현재 비중 가중평균이며, 매수 시점·입출금·배당·환율 변화는 반영하지 않습니다. 실제 연간 수익률은 거래 기록이 필요합니다. 어제 대비 증감에는 입출금도 포함됩니다.</p>
               </div>
             </div>
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/70">
@@ -1160,15 +1110,15 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                 onChange={(e) => setManualDate(e.target.value)}
                 className="border border-slate-300 rounded-lg px-2.5 py-1.5 w-28 font-mono font-bold bg-white"
               />
-              <input
-                type="number"
+              <PrivateNumberInput
+
                 placeholder="총 평가액(₩, 미입력시 현재값)"
                 value={manualValueKrw}
                 onChange={(e) => setManualValueKrw(e.target.value)}
                 className="border border-slate-300 rounded-lg px-2.5 py-1.5 w-48 font-mono bg-white"
               />
-              <input
-                type="number"
+              <PrivateNumberInput
+
                 placeholder="총 원금(₩, 미입력시 현재값)"
                 value={manualPrincipalKrw}
                 onChange={(e) => setManualPrincipalKrw(e.target.value)}
@@ -1259,8 +1209,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                       </td>
                       <td className="py-3 px-4">{currentWeight.toFixed(1)}%</td>
                       <td className="py-3 px-4">
-                        <input
-                          type="number"
+                        <input type="number"
+
                           disabled={!isChecked}
                           className={`border px-2.5 py-1.5 rounded-lg w-full outline-none transition-all font-bold ${
                             isChecked
@@ -1316,7 +1266,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
               <textarea
                 className="w-full h-32 p-3 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none font-mono"
                 placeholder={"AAPL, 30, 175\nIREN 100 45"}
-                value={importText}
+                value={hideAmounts ? "금액을 표시한 뒤 가져오기를 사용할 수 있습니다." : importText}
+                disabled={hideAmounts}
                 onChange={(e) => setImportText(e.target.value)}
               />
               <div className="flex justify-end mt-3 gap-2">
@@ -1338,7 +1289,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
 
           <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-4">
             <h4 className="text-sm font-bold text-slate-600">
-              내 자산 {assets.length}개{" "}
+              내 자산 {assets.length}개 중 {visibleAssets.length}개 표시{" "}
               <span className="text-xs font-normal text-slate-400">
                 (현금 선택 시 매수 평단가는 입력 불필요하며 보유액만 입력)
               </span>
@@ -1360,9 +1311,18 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
             </div>
           </div>
 
-          <div className="md:hidden"><MobileAssetCards assets={assets} currency={currency} onUpdate={updateAsset}
+          <div className="asset-search-controls">
+            <label>종목 검색<input type="search" placeholder="종목명 또는 티커" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} /></label>
+            <label>자산 분류<select value={assetCategory} onChange={event => setAssetCategory(event.target.value)}>{['전체', ...ALL_CATEGORIES].map(category => <option key={category}>{category}</option>)}</select></label>
+            <label>정렬<select value={assetSort} onChange={event => setAssetSort(event.target.value as AssetSort)}><option value="registered">등록순</option><option value="value">평가금액 큰 순</option><option value="return-desc">수익률 높은 순</option><option value="return-asc">수익률 낮은 순</option><option value="name">이름순</option></select></label>
+            <button onClick={resetAssetFilters}>초기화</button>
+          </div>
+          <p className="asset-controls-note">검색·정렬은 이 목록에만 적용됩니다. 전체 자산 합계와 차트는 바뀌지 않습니다. 평단가는 매수 당시 금액을 입력하세요. 환율 갱신으로 바뀌지 않습니다.</p>
+          {hideAmounts && <p className="asset-controls-note" role="status">금액·수량을 숨겼습니다. 금액을 표시하면 다시 수정할 수 있습니다.</p>}
+          {visibleAssets.length === 0 && assets.length > 0 && <p className="mobile-assets-empty">검색 조건에 맞는 자산이 없어요.</p>}
+          <div className="md:hidden">{(visibleAssets.length > 0 || assets.length === 0) && <MobileAssetCards assets={visibleAssets} currency={currency} onUpdate={updateAsset}
             onRemove={removeAsset} refreshing={isRefreshing}
-            onRefresh={asset => { void fetchCurrentPrice(asset.id, asset.category, asset.name, usdToKrw); }} /></div>
+            onRefresh={asset => { void fetchCurrentPrice(asset.id, asset.category, asset.name, usdToKrw); }} />}</div>
           <div className="hidden md:block overflow-x-auto max-h-[500px] overflow-y-auto rounded-lg border border-slate-200">
             <table className="w-full text-xs text-left whitespace-nowrap">
               <thead className="bg-slate-100 text-slate-600 uppercase font-semibold sticky top-0 z-10 shadow-sm">
@@ -1380,7 +1340,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
-                {assets.map((a) => {
+                {visibleAssets.map((a) => {
                   const isCash = a.category === "현금";
                   const profitRateUsd = !isCash && a.avgPriceUsd > 0 ? ((a.currentPriceUsd - a.avgPriceUsd) / a.avgPriceUsd) * 100 : 0;
                   const profitRateKrw = !isCash && a.avgPriceKrw > 0 ? ((a.currentPriceKrw - a.avgPriceKrw) / a.avgPriceKrw) * 100 : 0;
@@ -1398,6 +1358,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                           <option value="국내주식">국내주식</option>
                           <option value="현금">현금</option>
                         </select>
+                        {isCash && <select aria-label="현금 기준 통화" value={a.cashCurrency || 'KRW'} onChange={event => updateAsset(a.id, 'cashCurrency', event.target.value)} className="block mt-2 border rounded p-1.5"><option value="KRW">원화 기준</option><option value="USD">달러 기준</option></select>}
                       </td>
                       <td className="py-2 px-2">
                         <input
@@ -1411,8 +1372,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                         {isCash ? (
                           <span className="inline-block px-2 py-1.5 text-slate-400 font-mono">1 (고정)</span>
                         ) : (
-                          <input
-                            type="number"
+                          <PrivateNumberInput
+
                             className="bg-transparent border border-slate-200 rounded px-2 py-1.5 outline-none focus:border-blue-500 font-mono w-20"
                             value={a.quantity}
                             onChange={(e) => updateAsset(a.id, "quantity", e.target.value)}
@@ -1425,8 +1386,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                             입력 불필요
                           </span>
                         ) : (
-                          <input
-                            type="number"
+                          <PrivateNumberInput
+
                             step="0.01"
                             className="border border-blue-200 bg-blue-50/30 rounded px-2 py-1.5 outline-none focus:border-blue-500 font-mono font-bold text-blue-700 w-28"
                             value={a.avgPriceUsd}
@@ -1440,8 +1401,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                             입력 불필요
                           </span>
                         ) : (
-                          <input
-                            type="number"
+                          <PrivateNumberInput
+
                             className="bg-transparent border border-slate-200 rounded px-2 py-1.5 outline-none focus:border-blue-500 font-mono text-slate-600 w-32"
                             value={Math.round(a.avgPriceKrw)}
                             onChange={(e) => updateAsset(a.id, "avgPriceKrw", e.target.value)}
@@ -1450,8 +1411,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                       </td>
                       <td className="py-2 px-2 font-mono text-slate-700 font-semibold">
                         {isCash ? (
-                          <input
-                            type="number"
+                          <PrivateNumberInput
+
                             step="0.01"
                             className="border border-emerald-300 bg-emerald-50/30 rounded px-2 py-1.5 outline-none focus:border-emerald-600 font-mono font-bold text-emerald-700 w-28"
                             value={Math.round(a.currentPriceUsd * 100) / 100}
@@ -1464,8 +1425,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                       </td>
                       <td className="py-2 px-2 font-mono text-slate-700 font-semibold">
                         {isCash ? (
-                          <input
-                            type="number"
+                          <PrivateNumberInput
+
                             className="border border-emerald-300 bg-emerald-50/30 rounded px-2 py-1.5 outline-none focus:border-emerald-600 font-mono font-bold text-emerald-700 w-32"
                             value={Math.round(a.currentPriceKrw)}
                             onChange={(e) => updateAsset(a.id, "currentPriceKrw", e.target.value)}
@@ -1533,6 +1494,6 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
           </p>
         </footer>
       </div>
-    </div>
+    </div></AmountPrivacy.Provider>
   );
 }
