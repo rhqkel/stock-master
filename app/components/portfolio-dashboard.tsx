@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { validPortfolio, validChange } from '@/lib/portfolio-storage';
 import type { Asset, MonthlyHistory, PortfolioState, PortfolioData, ChangeEntry } from '@/lib/portfolio-types';
 import { appendChange } from '@/lib/portfolio-history';
+import { calculateRebalance, migrateRebalance, rebalanceKey } from '@/lib/portfolio-rebalance';
 import DashboardSection, { DashboardNavigation, sections } from './dashboard-section';
 import ChangeHistory from './change-history';
 import { revalueAsset, editAsset, selectAssets, type AssetSort } from '@/lib/asset-calculations';
@@ -124,7 +125,8 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
   };
   const applyState = (state: PortfolioState) => {
     setAssets(state.assets); setHistory(state.history); setGoal(state.goal);
-    setTargetWeights(state.targetWeights); setRebalanceEnabled(state.rebalanceEnabled);
+    const migrated = migrateRebalance(state.assets, state.targetWeights, state.rebalanceEnabled);
+    setTargetWeights(migrated.targetWeights); setRebalanceEnabled(migrated.rebalanceEnabled);
     setYesterdayValue(state.yesterdayValue); setUsdToKrw(state.usdToKrw);
   };
   const restoreChange = (entry: ChangeEntry, confirm: boolean) => {
@@ -224,14 +226,17 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
     ]);
   };
 
-  const updateTargetWeight = (cat: string, val: string) => {
-    recordChange(`${cat} 목표 비중 수정`, `weight:${cat}`);
-    setTargetWeights((prev) => ({ ...prev, [cat]: Number(val) || 0 }));
+  const updateTargetWeight = (asset: Asset, val: string) => {
+    const key = rebalanceKey(asset);
+    recordChange(`${asset.name} 목표 비중 수정`, `weight:${key}`);
+    const number = Number(val);
+    setTargetWeights((prev) => ({ ...prev, [key]: Number.isFinite(number) ? Math.min(100, Math.max(0, number)) : 0 }));
   };
 
-  const toggleRebalanceCategory = (cat: string) => {
-    recordChange(`${cat} 리밸런싱 ${rebalanceEnabled[cat] !== false ? '제외' : '포함'}`);
-    setRebalanceEnabled((prev) => ({ ...prev, [cat]: !prev[cat] }));
+  const toggleRebalanceAsset = (asset: Asset) => {
+    const key = rebalanceKey(asset);
+    recordChange(`${asset.name} 리밸런싱 ${rebalanceEnabled[key] !== false ? '제외' : '포함'}`);
+    setRebalanceEnabled((prev) => ({ ...prev, [key]: prev[key] === false }));
   };
 
   // --- 환율 적용 공통 헬퍼 함수 ---
@@ -452,6 +457,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
     const currentMonthDate = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}.01`;
     setManualDate(currentMonthDate);
 
+    let loadedAssets: Asset[] = [];
     if (savedAssets) {
       try {
         const parsed = JSON.parse(savedAssets).map((a: any) => {
@@ -474,6 +480,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
             return1Y: Number(a.return1Y) || 0,
           };
         });
+        loadedAssets = parsed;
         setAssets(parsed);
       } catch {
         setAssets([]);
@@ -498,12 +505,9 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
     }
 
     if (savedGoal !== null && Number.isFinite(Number(savedGoal))) setGoal(Number(savedGoal));
-    if (savedWeights) setTargetWeights(JSON.parse(savedWeights));
-    if (savedRebalEnabled) {
-      try {
-        setRebalanceEnabled(JSON.parse(savedRebalEnabled));
-      } catch {}
-    }
+    const migrated = migrateRebalance(loadedAssets, JSON.parse(savedWeights || '{}'), JSON.parse(savedRebalEnabled || '{}'));
+    setTargetWeights(migrated.targetWeights);
+    setRebalanceEnabled(migrated.rebalanceEnabled);
     if (savedYest) setYesterdayValue(Number(savedYest) || 0);
 
     if (!storagePrefix) fetchExchangeRate();
@@ -592,14 +596,15 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
         }, 0)
       : 0;
 
-  // --- 평가액 기준 vs 원금 기준 카테고리 맵 동시 계산 ---
-  const currentCategoryMap = assets.reduce((acc, a) => {
+  const rebalancing = calculateRebalance(assets, targetWeights, rebalanceEnabled, currency);
+  // Charts and rebalancing share the same selected holdings and denominator.
+  const currentCategoryMap = rebalancing.selectedAssets.reduce((acc, a) => {
     const val = currency === "USD" ? a.quantity * a.currentPriceUsd : a.quantity * a.currentPriceKrw;
     acc[a.category] = (acc[a.category] || 0) + val;
     return acc;
   }, {} as Record<string, number>);
 
-  const principalCategoryMap = assets.reduce((acc, a) => {
+  const principalCategoryMap = rebalancing.selectedAssets.reduce((acc, a) => {
     const val = currency === "USD" ? a.quantity * a.avgPriceUsd : a.quantity * a.avgPriceKrw;
     acc[a.category] = (acc[a.category] || 0) + val;
     return acc;
@@ -607,11 +612,11 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
 
   const currentPieData = Object.keys(currentCategoryMap)
     .map((key) => ({ name: key, value: currentCategoryMap[key] }))
-    .filter((d) => d.value > 0 && rebalanceEnabled[d.name] !== false);
+    .filter((d) => d.value > 0);
 
   const principalPieData = Object.keys(principalCategoryMap)
     .map((key) => ({ name: key, value: principalCategoryMap[key] }))
-    .filter((d) => d.value > 0 && rebalanceEnabled[d.name] !== false);
+    .filter((d) => d.value > 0);
 
   const allocationCurrentTotal = currentPieData.reduce((sum, item) => sum + item.value, 0);
   const allocationPrincipalTotal = principalPieData.reduce((sum, item) => sum + item.value, 0);
@@ -624,7 +629,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
     const baseTotal = mode === "current" ? allocationCurrentTotal : allocationPrincipalTotal;
     const categoryShare = baseTotal > 0 ? (categoryVal / baseTotal) * 100 : 0;
 
-    const categoryAssets = assets
+    const categoryAssets = rebalancing.selectedAssets
       .filter((a) => a.category === categoryName)
       .map((a) => {
         const val =
@@ -998,7 +1003,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
             <div className="mb-2">
 
               <p className="text-xs text-slate-500">
-                목표 비중 리밸런싱에서 체크한 자산군만 표시합니다. 비중은 <strong>선택한 자산군 합계 기준</strong>이며, 각 영역에 커서를 올리면 종목별 비중을 볼 수 있습니다.
+                목표 비중 리밸런싱에서 체크한 종목만 자산군별로 모아 표시합니다. 비중은 <strong>선택한 종목 합계 기준</strong>이며, 각 영역에 커서를 올리면 종목별 비중을 볼 수 있습니다.
               </p>
             </div>
             <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2 min-h-[340px]">
@@ -1160,39 +1165,35 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
             <div>
 
               <p className="text-xs text-slate-500">
-                좌측 체크박스를 선택한 자산군만 선명하게 활성화되며, 체크 해제 시 어둡게 음영 처리되어 리밸런싱 계산에서 제외됩니다.
+                체크한 종목의 평가액 합계를 100%로 계산합니다. 체크하지 않은 종목은 현재 비중·매수/매도 금액·자산군 비중 차트에서 제외됩니다. 목표 비중은 종목별로 입력하세요.
               </p>
             </div>
             <span className="text-xs font-bold text-slate-600 bg-slate-100 px-3 py-1.5 rounded-lg">
               활성 목표 비중 합계:{" "}
               <strong className="text-blue-600">
-                {ALL_CATEGORIES.reduce((sum, c) => sum + (rebalanceEnabled[c] !== false ? targetWeights[c] || 0 : 0), 0)}%
+                {Number(rebalancing.targetTotal.toFixed(2))}%
               </strong>
             </span>
           </div>
+          <p className="text-xs text-slate-500 mb-3">선택한 종목 평가액: {formatCurrency(rebalancing.total)} · 현재 비중 합계: {rebalancing.total > 0 ? '100%' : '0%'} (반올림에 따라 행별 합계에 오차가 있을 수 있습니다.)</p>
+          {rebalancing.selectedAssets.length === 0 ? <p className="text-sm text-slate-500 mb-3">리밸런싱할 종목을 체크해주세요.</p> : rebalancing.total <= 0 ? <p className="text-sm text-slate-500 mb-3">선택한 종목의 평가액이 없어 비중을 계산할 수 없습니다.</p> : Math.abs(rebalancing.targetTotal - 100) > 0.005 && <p className="text-xs text-amber-700 mb-3">선택한 종목의 목표 비중 합계를 100%로 맞춰주세요. 현재 입력한 목표를 기준으로 필요 금액을 표시합니다.</p>}
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left border-collapse">
               <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-semibold border-y border-slate-200">
                 <tr>
                   <th className="py-3 px-4 w-20 text-center">리밸런싱</th>
-                  <th className="py-3 px-4">자산군 (Category)</th>
-                  <th className="py-3 px-4">현재 비중 (평가액 기준)</th>
+                  <th className="py-3 px-4">종목명</th>
+                  <th className="py-3 px-4">현재 비중 (선택한 종목 기준)</th>
                   <th className="py-3 px-4 w-36">목표 비중(%)</th>
                   <th className="py-3 px-4 text-right">필요 액션 (현재 선택 통화 기준)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {ALL_CATEGORIES.map((cat) => {
-                  const isChecked = rebalanceEnabled[cat] !== false;
-                  const currentAmount = currentCategoryMap[cat] || 0;
-                  const currentWeight = totalValue > 0 ? (currentAmount / totalValue) * 100 : 0;
-                  const targetW = targetWeights[cat] || 0;
-                  const targetAmount = totalValue * (targetW / 100);
-                  const diff = targetAmount - currentAmount;
+                {rebalancing.rows.map(({ asset, key, checked: isChecked, currentWeight, target: targetW, difference: diff }) => {
 
                   return (
                     <tr
-                      key={cat}
+                      key={key}
                       className={`transition-all duration-200 ${
                         isChecked
                           ? "bg-white hover:bg-blue-50/30 text-slate-900 font-medium"
@@ -1203,17 +1204,20 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                         <input
                           type="checkbox"
                           checked={isChecked}
-                          onChange={() => toggleRebalanceCategory(cat)}
+                          aria-label={`${asset.name} 리밸런싱 포함`}
+                          onChange={() => toggleRebalanceAsset(asset)}
                           className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
                         />
                       </td>
                       <td className={`py-3 px-4 font-bold ${isChecked ? "text-slate-900" : "text-slate-500 line-through"}`}>
-                        {cat}
+                        {asset.name || '이름 없는 종목'}
+                        <span className="block text-xs font-normal text-slate-500">{asset.category}</span>
                       </td>
-                      <td className="py-3 px-4">{currentWeight.toFixed(1)}%</td>
+                      <td className="py-3 px-4">{isChecked ? `${currentWeight.toFixed(1)}%` : '제외'}</td>
                       <td className="py-3 px-4">
                         <input type="number"
-
+                          min={0} max={100} step="any"
+                          aria-label={`${asset.name} 목표 비중`}
                           disabled={!isChecked}
                           className={`border px-2.5 py-1.5 rounded-lg w-full outline-none transition-all font-bold ${
                             isChecked
@@ -1221,7 +1225,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
                               : "border-slate-300 bg-slate-200 text-slate-400 cursor-not-allowed"
                           }`}
                           value={targetW}
-                          onChange={(e) => updateTargetWeight(cat, e.target.value)}
+                          onChange={(e) => updateTargetWeight(asset, e.target.value)}
                         />
                       </td>
                       <td
