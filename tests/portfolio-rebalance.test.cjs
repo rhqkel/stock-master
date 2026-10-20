@@ -61,3 +61,38 @@ test('stable IDs separate identical names; deleted targets do not count; new hol
   assert.equal(added.targetWeights['asset:new'], 0);
   assert.equal(added.rebalanceEnabled['asset:new'], true);
 });
+
+test('cash combines into one row and one target while chart holdings retain individual entries', () => {
+  const mixed = [holding('AAPL', '미국주식', 600), holding('won', '현금', 100), holding('dollar', '현금', 300)];
+  const migrated = migrateRebalance(mixed, { 'asset:AAPL': 60, 'asset:won': 10, 'asset:dollar': 30 }, {});
+  assert.equal(migrated.targetWeights['cash:combined'], 40);
+  for (const currency of ['KRW', 'USD']) {
+    const result = calculateRebalance(mixed, migrated.targetWeights, migrated.rebalanceEnabled, currency);
+    assert.equal(result.rows.length, 2);
+    assert.equal(result.rows[1].asset.name, '현금');
+    assert.equal(result.rows[1].amount, currency === 'KRW' ? 400 : 0.4);
+    assert.equal(result.rows[1].currentWeight, 40);
+    assert.equal(result.targetTotal, 100);
+    assert.equal(result.selectedAssets.length, 3);
+    const excluded = calculateRebalance(mixed, migrated.targetWeights, { 'cash:combined': false }, currency);
+    assert.equal(excluded.rows[0].currentWeight, 100);
+    assert.equal(excluded.rows[1].currentWeight, 0);
+    assert.equal(excluded.rows[1].difference, 0);
+    assert.equal(excluded.selectedAssets.length, 1);
+    assert.equal(excluded.targetTotal, 60);
+  }
+  assert.equal(mixed.length, 3);
+  assert.equal(mixed[1].currentPriceKrw, 100);
+});
+
+test('cash migration preserves category exclusion, grouped edits, and remains stable on reload and additions', () => {
+  const cash = [holding('won', '현금', 100), holding('dollar', '현금', 300)];
+  const legacy = migrateRebalance(cash, { '현금': 20 }, { '현금': false });
+  assert.equal(legacy.targetWeights['cash:combined'], 20);
+  assert.equal(legacy.rebalanceEnabled['cash:combined'], false);
+  const updated = migrateRebalance([...cash, holding('extra', '현금', 500)], { ...legacy.targetWeights, 'cash:combined': 35 }, legacy.rebalanceEnabled);
+  assert.equal(updated.targetWeights['cash:combined'], 35);
+  assert.equal(updated.rebalanceEnabled['cash:combined'], false);
+  const mixedSelection = migrateRebalance(cash, {}, { 'asset:won': false, 'asset:dollar': true });
+  assert.equal(mixedSelection.rebalanceEnabled['cash:combined'], true);
+});

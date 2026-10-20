@@ -1165,7 +1165,7 @@ export default function PortfolioDashboard({ storagePrefix = "", onSnapshot }: {
             <div>
 
               <p className="text-xs text-slate-500">
-                체크한 종목의 평가액 합계를 100%로 계산합니다. 체크하지 않은 종목은 현재 비중·매수/매도 금액·자산군 비중 차트에서 제외됩니다. 목표 비중은 종목별로 입력하세요.
+                체크한 종목의 평가액 합계를 100%로 계산합니다. 현금은 통화·계좌에 관계없이 한 줄로 합산합니다. 체크하지 않은 항목은 현재 비중·매수/매도 금액·자산군 비중 차트에서 제외됩니다. 목표 비중은 종목별로 입력하세요.
               </p>
             </div>
             <span className="text-xs font-bold text-slate-600 bg-slate-100 px-3 py-1.5 rounded-lg">
