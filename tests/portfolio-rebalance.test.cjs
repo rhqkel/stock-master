@@ -69,7 +69,7 @@ test('cash combines into one row and one target while chart holdings retain indi
   for (const currency of ['KRW', 'USD']) {
     const result = calculateRebalance(mixed, migrated.targetWeights, migrated.rebalanceEnabled, currency);
     assert.equal(result.rows.length, 2);
-    assert.equal(result.rows[1].asset.name, '현금');
+    assert.equal(result.rows[1].asset.name, '현금(won, dollar)');
     assert.equal(result.rows[1].amount, currency === 'KRW' ? 400 : 0.4);
     assert.equal(result.rows[1].currentWeight, 40);
     assert.equal(result.targetTotal, 100);

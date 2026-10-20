@@ -5,7 +5,8 @@ export const rebalanceKey = (asset: Asset) => asset.category === '현금' ? 'cas
 function groupCash(assets: Asset[]): Asset[] {
   const cash = assets.filter(asset => asset.category === '현금');
   if (cash.length === 0) return assets;
-  const combined: Asset = { ...cash[0], id: 'cash:combined', name: '현금', quantity: 1,
+  const names = [...new Set(cash.map(asset => asset.name.trim() || '이름 없는 현금'))];
+  const combined: Asset = { ...cash[0], id: 'cash:combined', name: `현금(${names.join(', ')})`, quantity: 1,
     currentPriceKrw: 0, currentPriceUsd: 0, avgPriceKrw: 0, avgPriceUsd: 0 };
   for (const asset of cash) {
     combined.currentPriceKrw += asset.quantity * asset.currentPriceKrw;
